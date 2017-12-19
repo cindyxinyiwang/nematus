@@ -57,8 +57,8 @@ def prepare_data_multi_src(seqs_x1, seqs_x2, seqs_y, weights=None, maxlen=None, 
         new_weights = []
         if weights is None:
             weights = [None] * len(seqs_y) # to make the zip easier
-        for l_x1, s_x1, l_x2, s_x2, l_y, s_y, w in zip(lengths_x, seqs_x, lengths_x2, seqs_x2, lengths_y, seqs_y, weights):
-            if l_x < maxlen and l_y < maxlen:
+        for l_x1, s_x1, l_x2, s_x2, l_y, s_y, w in zip(lengths_x1, seqs_x1, lengths_x2, seqs_x2, lengths_y, seqs_y, weights):
+            if l_x1 < maxlen and l_y < maxlen and l_x2 < maxlen:
                 new_seqs_x1.append(s_x1)
                 new_seqs_x2.append(s_x2)
                 new_lengths_x1.append(l_x1)
@@ -80,7 +80,7 @@ def prepare_data_multi_src(seqs_x1, seqs_x2, seqs_y, weights=None, maxlen=None, 
             else:
                 return None, None, None, None
 
-    n_samples = len(seqs_x)
+    n_samples = len(seqs_x1)
     maxlen_x1 = numpy.max(lengths_x1) + 1
     maxlen_x2 = numpy.max(lengths_x2) + 1
     maxlen_y = numpy.max(lengths_y) + 1
@@ -94,7 +94,7 @@ def prepare_data_multi_src(seqs_x1, seqs_x2, seqs_y, weights=None, maxlen=None, 
     for idx, [s_x1, s_x2, s_y] in enumerate(zip(seqs_x1, seqs_x2, seqs_y)):
         x1[:, :lengths_x1[idx], idx] = zip(*s_x1)
         x1_mask[:lengths_x1[idx]+1, idx] = 1.
-        x2[:, :lengths_x2[idx], idx] = zip(*s_x1)
+        x2[:, :lengths_x2[idx], idx] = zip(*s_x2)
         x2_mask[:lengths_x2[idx]+1, idx] = 1.
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
@@ -165,38 +165,25 @@ def init_params(options):
 
     # encoder: bidirectional RNN
     params = get_layer_param(options['encoder'])(options, params,
-                                              prefix='encoder',
+                                              prefix='encoder1',
                                               nin=options['dim_word'],
                                               dim=options['dim'],
                                               recurrence_transition_depth=options['enc_recurrence_transition_depth'])
     params = get_layer_param(options['encoder'])(options, params,
-                                              prefix='encoder_r',
+                                              prefix='encoder1_r',
                                               nin=options['dim_word'],
                                               dim=options['dim'],
                                               recurrence_transition_depth=options['enc_recurrence_transition_depth'])
-    if options['enc_depth'] > 1:
-        for level in range(2, options['enc_depth'] + 1):
-            prefix_f = pp('encoder', level)
-            prefix_r = pp('encoder_r', level)
-
-            if level <= options['enc_depth_bidirectional']:
-                params = get_layer_param(options['encoder'])(options, params,
-                                                             prefix=prefix_f,
-                                                             nin=options['dim'],
-                                                             dim=options['dim'],
-                                                             recurrence_transition_depth=options['enc_recurrence_transition_depth'])
-                params = get_layer_param(options['encoder'])(options, params,
-                                                             prefix=prefix_r,
-                                                             nin=options['dim'],
-                                                             dim=options['dim'],
-                                                             recurrence_transition_depth=options['enc_recurrence_transition_depth'])
-            else:
-                params = get_layer_param(options['encoder'])(options, params,
-                                                             prefix=prefix_f,
-                                                             nin=options['dim'] * 2,
-                                                             dim=options['dim'] * 2,
-                                                             recurrence_transition_depth=options['enc_recurrence_transition_depth'])
-
+    params = get_layer_param(options['encoder'])(options, params,
+                                              prefix='encoder2',
+                                              nin=options['dim_word'],
+                                              dim=options['dim'],
+                                              recurrence_transition_depth=options['enc_recurrence_transition_depth'])
+    params = get_layer_param(options['encoder'])(options, params,
+                                              prefix='encoder2_r',
+                                              nin=options['dim_word'],
+                                              dim=options['dim'],
+                                              recurrence_transition_depth=options['enc_recurrence_transition_depth'])
 
     ctxdim = 2 * options['dim']
 
@@ -206,7 +193,7 @@ def init_params(options):
 
     # init_state, init_cell
     params = get_layer_param('ff')(options, params, prefix='ff_state',
-                                nin=ctxdim, nout=dec_state)
+                                nin=2*ctxdim, nout=dec_state)
     # decoder
     params = get_layer_param(options['decoder'])(options, params,
                                               prefix='decoder',
@@ -245,7 +232,7 @@ def init_params(options):
                                 nout=options['dim_word'], ortho=False)
 
     params = get_layer_param('ff')(options, params, prefix='ff_logit_ctx',
-                                nin=ctxdim, nout=options['dim_word'],
+                                nin=ctxdim*2, nout=options['dim_word'],
                                 ortho=False)
 
     params = get_layer_param('ff')(options, params, prefix='ff_logit',
@@ -275,120 +262,109 @@ def init_params_lm(options, params):
     return params
 
 # bidirectional RNN encoder: take input x (optionally with mask), and produce sequence of context vectors (ctx)
-def build_encoder(tparams, options, dropout, x_mask=None, sampling=False):
+def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, sampling=False):
 
-    x = tensor.tensor3('x', dtype='int64')
+    x1 = tensor.tensor3('x1', dtype='int64')
+    x2 = tensor.tensor3('x2', dtype='int64')
     # source text; factors 1; length 5; batch size 10
-    x.tag.test_value = (numpy.random.rand(1, 5, 10)*100).astype('int64')
+    x1.tag.test_value = (numpy.random.rand(1, 5, 10)*100).astype('int64')
+    x2.tag.test_value = (numpy.random.rand(1, 5, 10)*100).astype('int64')
 
     # for the backward rnn, we just need to invert x
-    xr = x[:,::-1]
-    if x_mask is None:
-        xr_mask = None
+    x1r = x1[:,::-1]
+    x2r = x2[:,::-1]
+    if x1_mask is None:
+        x1r_mask = None
     else:
-        xr_mask = x_mask[::-1]
+        x1r_mask = x1_mask[::-1]
 
-    n_timesteps = x.shape[1]
-    n_samples = x.shape[2]
+    if x2_mask is None:
+        x2r_mask = None
+    else:
+        x2r_mask = x2_mask[::-1]
+
+    n_timesteps = x1.shape[1]
+    n_samples = x1.shape[2]
 
     # word embedding for forward rnn (source)
-    emb = get_layer_constr('embedding')(tparams, x, suffix='', factors= options['factors'])
+    emb1 = get_layer_constr('embedding')(tparams, x1, suffix='', factors= options['factors'])
 
     # word embedding for backward rnn (source)
-    embr = get_layer_constr('embedding')(tparams, xr, suffix='', factors= options['factors'])
+    emb1r = get_layer_constr('embedding')(tparams, x1r, suffix='', factors= options['factors'])
+
+    emb2 = get_layer_constr('embedding')(tparams, x2, suffix='', factors= options['factors'])
+
+    emb2r = get_layer_constr('embedding')(tparams, x2r, suffix='', factors= options['factors'])
 
     if options['use_dropout']:
-        source_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
+        source1_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
+        source2_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
         if not sampling:
-            source_dropout = tensor.tile(source_dropout, (1,1,options['dim_word']))
-        emb *= source_dropout
+            source1_dropout = tensor.tile(source1_dropout, (1,1,options['dim_word']))
+            source2_dropout = tensor.tile(source2_dropout, (1,1,options['dim_word']))
+        emb1 *= source1_dropout
+        emb2 *= source2_dropout
 
         if sampling:
-            embr *= source_dropout
+            emb1r *= source1_dropout
+            emb2r *= source2_dropout
         else:
             # we drop out the same words in both directions
-            embr *= source_dropout[::-1]
+            emb1r *= source1_dropout[::-1]
+            emb2r *= source2_dropout[::-1]
 
 
     ## level 1
-    proj = get_layer_constr(options['encoder'])(tparams, emb, options, dropout,
-                                                prefix='encoder',
-                                                mask=x_mask,
+    proj1 = get_layer_constr(options['encoder'])(tparams, emb1, options, dropout,
+                                                prefix='encoder1',
+                                                mask=x1_mask,
                                                 dropout_probability_below=options['dropout_embedding'],
                                                 dropout_probability_rec=options['dropout_hidden'],
                                                 recurrence_transition_depth=options['enc_recurrence_transition_depth'],
                                                 truncate_gradient=options['encoder_truncate_gradient'],
                                                 profile=profile)
-    projr = get_layer_constr(options['encoder'])(tparams, embr, options, dropout,
-                                                 prefix='encoder_r',
-                                                 mask=xr_mask,
+    proj1r = get_layer_constr(options['encoder'])(tparams, emb1r, options, dropout,
+                                                 prefix='encoder1_r',
+                                                 mask=x1r_mask,
                                                  dropout_probability_below=options['dropout_embedding'],
                                                  dropout_probability_rec=options['dropout_hidden'],
                                                  recurrence_transition_depth=options['enc_recurrence_transition_depth'],
                                                  truncate_gradient=options['encoder_truncate_gradient'],
                                                  profile=profile)
-
+    proj2 = get_layer_constr(options['encoder'])(tparams, emb2, options, dropout,
+                                                prefix='encoder2',
+                                                mask=x2_mask,
+                                                dropout_probability_below=options['dropout_embedding'],
+                                                dropout_probability_rec=options['dropout_hidden'],
+                                                recurrence_transition_depth=options['enc_recurrence_transition_depth'],
+                                                truncate_gradient=options['encoder_truncate_gradient'],
+                                                profile=profile)
+    proj2r = get_layer_constr(options['encoder'])(tparams, emb2r, options, dropout,
+                                                 prefix='encoder2_r',
+                                                 mask=x2r_mask,
+                                                 dropout_probability_below=options['dropout_embedding'],
+                                                 dropout_probability_rec=options['dropout_hidden'],
+                                                 recurrence_transition_depth=options['enc_recurrence_transition_depth'],
+                                                 truncate_gradient=options['encoder_truncate_gradient'],
+                                                 profile=profile)
     # discard LSTM cell state
     if options['encoder'].startswith('lstm'):
-        proj[0] = get_slice(proj[0], 0, options['dim'])
-        projr[0] = get_slice(projr[0], 0, options['dim'])
-
-    ## bidirectional levels before merge
-    for level in range(2, options['enc_depth_bidirectional'] + 1):
-        prefix_f = pp('encoder', level)
-        prefix_r = pp('encoder_r', level)
-
-        # run forward on previous backward and backward on previous forward
-        input_f = projr[0][::-1]
-        input_r = proj[0][::-1]
-
-        proj = get_layer_constr(options['encoder'])(tparams, input_f, options, dropout,
-                                                    prefix=prefix_f,
-                                                    mask=x_mask,
-                                                    dropout_probability_below=options['dropout_hidden'],
-                                                    dropout_probability_rec=options['dropout_hidden'],
-                                                    recurrence_transition_depth=options['enc_recurrence_transition_depth'],
-                                                    truncate_gradient=options['encoder_truncate_gradient'],
-                                                    profile=profile)
-        projr = get_layer_constr(options['encoder'])(tparams, input_r, options, dropout,
-                                                     prefix=prefix_r,
-                                                     mask=xr_mask,
-                                                     dropout_probability_below=options['dropout_hidden'],
-                                                     dropout_probability_rec=options['dropout_hidden'],
-                                                     recurrence_transition_depth=options['enc_recurrence_transition_depth'],
-                                                     truncate_gradient=options['encoder_truncate_gradient'],
-                                                     profile=profile)
-
-        # discard LSTM cell state
-        if options['encoder'].startswith('lstm'):
-            proj[0] = get_slice(proj[0], 0, options['dim'])
-            projr[0] = get_slice(projr[0], 0, options['dim'])
-
-        # residual connections
-        if level > 1:
-            proj[0] += input_f
-            projr[0] += input_r
+        proj1[0] = get_slice(proj1[0], 0, options['dim'])
+        proj1r[0] = get_slice(proj1r[0], 0, options['dim'])
+        proj2[0] = get_slice(proj1[0], 0, options['dim'])
+        proj2r[0] = get_slice(proj1r[0], 0, options['dim'])
 
     # context will be the concatenation of forward and backward rnns
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    ctx1 = concatenate([proj1[0], proj1r[0][::-1]], axis=proj1[0].ndim-1)
+    ctx2 = concatenate([proj2[0], proj2r[0][::-1]], axis=proj2[0].ndim-1)
 
-    ## forward encoder layers after bidirectional layers are concatenated
-    for level in range(options['enc_depth_bidirectional'] + 1, options['enc_depth'] + 1):
-
-        ctx += get_layer_constr(options['encoder'])(tparams, ctx, options, dropout,
-                                                   prefix=pp('encoder', level),
-                                                   mask=x_mask,
-                                                   dropout_probability_below=options['dropout_hidden'],
-                                                   dropout_probability_rec=options['dropout_hidden'],
-                                                   recurrence_transition_depth=options['enc_recurrence_transition_depth'],
-                                                   truncate_gradient=options['encoder_truncate_gradient'],
-                                                   profile=profile)[0]
-
-    return x, ctx
+    ## forward encoder layers after bidirectional layers are concatenate
+    return x1, x2, ctx1, ctx2
 
 
 # RNN decoder (including embedding and feedforward layer before output)
-def build_decoder(tparams, options, y, ctx, init_state, dropout, x_mask=None, y_mask=None, sampling=False, pctx_=None, shared_vars=None, lm_init_state=None):
+def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, 
+    y_mask=None, sampling=False, pctx1_=None, pctx2_=None, shared_vars=None, lm_init_state=None):
     opt_ret = dict()
 
     # tell RNN whether to advance just one step at a time (for sampling),
@@ -428,9 +404,9 @@ def build_decoder(tparams, options, y, ctx, init_state, dropout, x_mask=None, y_
     # decoder - pass through the decoder conditional gru with attention
     proj = get_layer_constr(options['decoder'])(tparams, emb, options, dropout,
                                             prefix='decoder',
-                                            mask=y_mask, context=ctx,
-                                            context_mask=x_mask,
-                                            pctx_=pctx_,
+                                            mask=y_mask, context1=ctx1, context2=ctx2,
+                                            context1_mask=x1_mask, context2_mask=x2_mask,
+                                            pctx1_=pctx1_, pctx2_=pctx2_,
                                             one_step=one_step,
                                             init_state=init_state[0],
                                             recurrence_transition_depth=options['dec_base_recurrence_transition_depth'],
@@ -588,20 +564,24 @@ def build_model(tparams, options):
     use_noise = theano.shared(numpy_floatX(0.))
     dropout = dropout_constr(options, use_noise, trng, sampling=False)
 
-    x_mask = tensor.matrix('x_mask', dtype=floatX)
+    x1_mask = tensor.matrix('x_mask', dtype=floatX)
+    x2_mask = tensor.matrix('x_mask', dtype=floatX)
     y = tensor.matrix('y', dtype='int64')
     y_mask = tensor.matrix('y_mask', dtype=floatX)
     # source text length 5; batch size 10
-    x_mask.tag.test_value = numpy.ones(shape=(5, 10)).astype(floatX)
+    x1_mask.tag.test_value = numpy.ones(shape=(5, 10)).astype(floatX)
+    x2_mask.tag.test_value = numpy.ones(shape=(5, 10)).astype(floatX)
     # target text length 8; batch size 10
     y.tag.test_value = (numpy.random.rand(8, 10)*100).astype('int64')
     y_mask.tag.test_value = numpy.ones(shape=(8, 10)).astype(floatX)
 
-    x, ctx = build_encoder(tparams, options, dropout, x_mask, sampling=False)
-    n_samples = x.shape[2]
+    x1, x2, ctx1, ctx2 = build_encoder(tparams, options, dropout, x1_mask, x2_mask, sampling=False)
+    n_samples = x1.shape[2]
 
     # mean of the context (across time) will be used to initialize decoder rnn
-    ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
+    ctx_mean1 = (ctx1 * x1_mask[:, :, None]).sum(0) / x1_mask.sum(0)[:, None]
+    ctx_mean2 = (ctx2 * x2_mask[:, :, None]).sum(0) / x2_mask.sum(0)[:, None]
+    ctx_mean = concatenate([ctx_mean1, ctx_mean2], axis=ctx_mean1.ndim-1)
 
     # or you can use the last state of forward + backward encoder rnns
     # ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
@@ -616,7 +596,8 @@ def build_model(tparams, options):
     if options['dec_depth'] > 1:
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
 
-    logit, opt_ret, _, _ = build_decoder(tparams, options, y, ctx, init_state, dropout, x_mask=x_mask, y_mask=y_mask, sampling=False)
+    logit, opt_ret, _, _ = build_decoder(tparams, options, y, ctx1, ctx2, 
+        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, sampling=False)
 
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
@@ -631,7 +612,7 @@ def build_model(tparams, options):
 
     #print "Print out in build_model()"
     #print opt_ret
-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost
 
 
 # build a sampler
@@ -639,11 +620,13 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
 
     dropout = dropout_constr(options, use_noise, trng, sampling=True)
 
-    x, ctx = build_encoder(tparams, options, dropout, x_mask=None, sampling=True)
-    n_samples = x.shape[2]
+    x1, x2, ctx1, ctx2 = build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, sampling=True)
+    n_samples = x1.shape[2]
 
     # get the input for decoder rnn initializer mlp
-    ctx_mean = ctx.mean(0)
+    ctx1_mean = ctx1.mean(0)
+    ctx2_mean = ctx2.mean(0)
+    ctx_mean = concatenate([ctx1_mean, ctx2_mean], axis=ctx1_mean.ndim-1)
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
 
     init_state = get_layer_constr('ff')(tparams, ctx_mean, options, dropout,
@@ -656,8 +639,8 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
 
     logging.info('Building f_init...')
-    outs = [init_state, ctx]
-    f_init = theano.function([x], outs, name='f_init', profile=profile)
+    outs = [init_state, ctx1, ctx2]
+    f_init = theano.function([x1, x2], outs, name='f_init', profile=profile)
     logging.info('Done')
 
     # x: 1 x 1
@@ -672,7 +655,7 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     if options['deep_fusion_lm']:
         lm_init_state = tensor.matrix('lm_init_state', dtype=floatX)
 
-    logit, opt_ret, ret_state, lm_ret_state = build_decoder(tparams, options, y, ctx, init_state, dropout, x_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
+    logit, opt_ret, ret_state, lm_ret_state = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
 
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
@@ -684,10 +667,10 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     # sampled word for the next target, next hidden state to be used
     logging.info('Building f_next..')
     if options['deep_fusion_lm']:
-        inps = [y, ctx, init_state, lm_init_state]
+        inps = [y, ctx1, ctx2, init_state, lm_init_state]
         outs = [next_probs, next_sample, ret_state, lm_ret_state]
     else:
-        inps = [y, ctx, init_state]
+        inps = [y, ctx1, ctx2, init_state]
         outs = [next_probs, next_sample, ret_state]
 
     if return_alignment:
@@ -828,7 +811,7 @@ def build_full_sampler(tparams, options, use_noise, trng, greedy=False):
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
-def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=30,
+def gen_sample(f_init, f_next, x1, x2, model_options=[None], trng=None, k=1, maxlen=30,
                stochastic=True, argmax=False, return_alignment=False, suppress_unk=False,
                return_hyp_graph=False):
 
@@ -868,11 +851,12 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
     next_state = [None]*num_models
     lm_next_state = [None]*num_models
     ctx0 = [None]*num_models
+    ctx1 = [None]*num_models
     next_p = [None]*num_models
     dec_alphas = [None]*num_models
     # get initial state of decoder rnn and encoder context
     for i in xrange(num_models):
-        ret = f_init[i](x)
+        ret = f_init[i](x1, x2)
 
         # to more easily manipulate batch size, go from (layers, batch_size, dim) to (batch_size, layers, dim)
         ret[0] = numpy.transpose(ret[0], (1,0,2))
@@ -884,13 +868,15 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             lm_next_state[i] = numpy.tile( numpy.zeros((1, lm_dim)).astype(floatX) , (live_k, 1))
             
         ctx0[i] = ret[1]
+        ctx1[i] = ret[2]
 
     next_w = -1 * numpy.ones((live_k,)).astype('int64')  # bos indicator
 
     # x is a sequence of word ids followed by 0, eos id
     for ii in xrange(maxlen):
         for i in xrange(num_models):
-            ctx = numpy.tile(ctx0[i], [live_k, 1])
+            ctx1 = numpy.tile(ctx0[i], [live_k, 1])
+            ctx2 = numpy.tile(ctx1[i], [live_k, 1])
 
             # for theano function, go from (batch_size, layers, dim) to (layers, batch_size, dim)
             next_state[i] = numpy.transpose(next_state[i], (1,0,2))
@@ -901,7 +887,7 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i], lm_next_state[i] = ret[0], ret[1], ret[2], ret[3]
             else:
-                inps = [next_w, ctx, next_state[i]]
+                inps = [next_w, ctx1, ctx2, next_state[i]]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i] = ret[0], ret[1], ret[2]
@@ -1075,32 +1061,35 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
 
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, normalization_alpha=0.0, alignweights=False):
+def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=True, normalization_alpha=0.0, alignweights=False):
     probs = []
     n_done = 0
 
-    alignments_json = []
+    alignments1_json = []
+    alignments2_json = []
 
     for x, y in iterator:
         #ensure consistency in number of factors
-        if len(x[0][0]) != options['factors']:
-            logging.error('Mismatch between number of factors in settings ({0}), and number in validation corpus ({1})\n'.format(options['factors'], len(x[0][0])))
-            sys.exit(1)
+        #if len(x[0][0]) != options['factors']:
+        #    logging.error('Mismatch between number of factors in settings ({0}), and number in validation corpus ({1})\n'.format(options['factors'], len(x[0][0])))
+        #    sys.exit(1)
 
         n_done += len(x)
 
-        x, x_mask, y, y_mask = prepare_data(x, y,
+        x1, x1_mask, x2, x2_mask, y, y_mask = prepare_data_multi_src(x[0], x[1], y,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'],
                                             n_factors=options['factors'])
 
         ### in optional save weights mode.
         if alignweights:
-            pprobs, attention = f_log_probs(x, x_mask, y, y_mask)
-            for jdata in get_alignments(attention, x_mask, y_mask):
-                alignments_json.append(jdata)
+            pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask)
+            for jdata in get_alignments(attention1, x1_mask, y_mask):
+                alignments1_json.append(jdata)
+            for jdata in get_alignments(attention2, x2_mask, y_mask):
+                alignments2_json.append(jdata)
         else:
-            pprobs = f_log_probs(x, x_mask, y, y_mask)
+            pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask)
 
         # normalize scores according to output length
         if normalization_alpha:
@@ -1112,7 +1101,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, norma
 
         logging.debug('%d samples computed' % (n_done))
 
-    return numpy.array(probs), alignments_json
+    return numpy.array(probs), alignments1_json, alignments2_json
 
 
 def augment_raml_data(x, y, tgt_worddict, options):
@@ -1475,12 +1464,12 @@ def train(dim_word=512,  # word vector dimensionality
     tparams = init_theano_params(params)
 
     trng, use_noise, \
-        x, x_mask, y, y_mask, \
+        x1, x1_mask, x2, x2_mask, y, y_mask, \
         opt_ret, \
         cost = \
         build_model(tparams, model_options)
 
-    inps = [x, x_mask, y, y_mask]
+    inps = [x1, x1_mask, x2, x2_mask, y, y_mask]
 
     if validFreq or sampleFreq:
         logging.info('Building sampler')
@@ -1618,7 +1607,7 @@ def train(dim_word=512,  # word vector dimensionality
                 if multi_src:
                   xlen = len(x[0])
                   n_samples += xlen
-                  x1, x1_mask, x1, x2_mask, y, y_mask, sample_weights = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
+                  x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
@@ -1649,8 +1638,7 @@ def train(dim_word=512,  # word vector dimensionality
                     cost = f_update(lrate, x, x_mask, y, y_mask, sample_weights)
                 else:
                     if multi_src:
-                      cost = f_update(lrate, x1, x1_mask, y, y_mask)
-                      #cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask)
+                      cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask)
                     else:
                       cost = f_update(lrate, x, x_mask, y, y_mask)
                 cost_sum += cost
@@ -1798,13 +1786,15 @@ def train(dim_word=512,  # word vector dimensionality
                 # FIXME: random selection?
                 for jj in xrange(numpy.minimum(5, x.shape[2])):
                     stochastic = True
-                    x_current = x[:, :, jj][:, :, None]
-
+                    x1_current = x1[:, :, jj][:, :, None]
+                    x2_current = x2[:, :, jj][:, :, None]
                     # remove padding
-                    x_current = x_current[:,:x_mask.astype('int64')[:, jj].sum(),:]
+                    x1_current = x1_current[:,:x1_mask.astype('int64')[:, jj].sum(),:]
+                    x2_current = x2_current[:,:x2_mask.astype('int64')[:, jj].sum(),:]
 
                     sample, score, sample_word_probs, alignment, hyp_graph = gen_sample([f_init], [f_next],
-                                               x_current,
+                                               x1_current,
+                                               x2_current,
                                                model_options,
                                                trng=trng, k=1,
                                                maxlen=30,
@@ -1813,19 +1803,17 @@ def train(dim_word=512,  # word vector dimensionality
                                                suppress_unk=False,
                                                return_hyp_graph=False)
                     print 'Source ', jj, ': ',
-                    for pos in range(x.shape[1]):
-                        if x[0, pos, jj] == 0:
+                    for pos in range(x1.shape[1]):
+                        if x1[0, pos, jj] == 0:
                             break
-                        for factor in range(factors):
-                            vv = x[factor, pos, jj]
-                            if vv in worddicts_r[factor]:
-                                sys.stdout.write(worddicts_r[factor][vv])
+                        for i in range(2):
+                            vv = x1[factor, pos, jj]
+                            if vv in worddicts_r[i]:
+                                sys.stdout.write(worddicts_r[i][vv])
                             else:
                                 sys.stdout.write('UNK')
-                            if factor+1 < factors:
-                                sys.stdout.write('|')
-                            else:
-                                sys.stdout.write(' ')
+                            sys.stdout.write(' ')
+                            print
                     print
                     print 'Truth ', jj, ' : ',
                     for vv in y[:, jj]:
@@ -1854,7 +1842,7 @@ def train(dim_word=512,  # word vector dimensionality
             # validate model on validation set and early stop if necessary
             if valid is not None and validFreq and numpy.mod(training_progress.uidx, validFreq) == 0:
                 use_noise.set_value(0.)
-                valid_errs, alignment = pred_probs(f_log_probs, prepare_data,
+                valid_errs, alignment1, alignment2 = pred_probs(f_log_probs, prepare_data_multi_src,
                                         model_options, valid)
                 valid_err = valid_errs.mean()
                 training_progress.history_errs.append(float(valid_err))
@@ -1934,7 +1922,7 @@ def train(dim_word=512,  # word vector dimensionality
 
     if valid is not None:
         use_noise.set_value(0.)
-        valid_errs, alignment = pred_probs(f_log_probs, prepare_data,
+        valid_errs, alignment1, alignment2 = pred_probs(f_log_probs, prepare_data_multi_src,
                                            model_options, valid)
         valid_err = valid_errs.mean()
 
@@ -2026,7 +2014,7 @@ if __name__ == '__main__':
                          choices=['gru', 'lstm'],
                          help='encoder recurrent layer (default: %(default)s)')
     network.add_argument('--decoder', type=str, default='gru_cond',
-                         choices=['gru_cond', 'lstm_cond'],
+                         choices=['gru_cond', 'lstm_cond', 'gru_double_cond'],
                          help='first decoder recurrent layer (default: %(default)s)')
     network.add_argument('--decoder_deep', type=str, default='gru',
                          choices=['gru', 'gru_cond', 'lstm'],
