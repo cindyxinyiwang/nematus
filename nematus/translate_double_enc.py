@@ -23,9 +23,10 @@ class Translation(object):
     """
     Models a translated segment.
     """
-    def __init__(self, source_words, target_words, sentence_id=None, score=0, alignment=None,
+    def __init__(self, source1_words, source2_words, target_words, sentence_id=None, score=0, alignment=None,
                  target_probs=None, hyp_graph=None, hypothesis_id=None):
-        self.source_words = source_words
+        self.source1_words = source1_words
+        self.source2_words = source2_words
         self.target_words = target_words
         self.sentence_id = sentence_id
         self.score = score
@@ -233,7 +234,7 @@ class Translator(object):
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
         from theano import shared
 
-        from nmt import (build_sampler, gen_sample)
+        from nmt_double_enc import (build_sampler, gen_sample)
         from theano_util import (numpy_floatX, load_params, init_theano_params)
 
         trng = RandomStreams(1234)
@@ -361,8 +362,10 @@ class Translator(object):
           maxlen = int(max_ratio * len(seq))
 
         return gen_sample(fs_init, fs_next,
-                          numpy.array(seq).T.reshape(
-                              [len(seq[0]), len(seq), 1]),
+                          [numpy.array(seq[0]).T.reshape(
+                              [len(seq[0][0]), len(seq[0]), 1]),
+                          numpy.array(seq[1]).T.reshape(
+                              [len(seq[1][0]), len(seq[1]), 1])],
                           self._options[0],
                           trng=trng, k=k, maxlen=maxlen,
                           stochastic=False, argmax=False,
@@ -373,28 +376,38 @@ class Translator(object):
 
     ### WRITING TO AND READING FROM QUEUES ###
 
-    def _send_jobs(self, input_, translation_settings):
+    def _send_jobs(self, input1_, input2_, translation_settings):
         """
         """
-        source_sentences = []
-        for idx, line in enumerate(input_):
+        source1_sentences = []
+        source2_sentences = []
+        for idx, line in enumerate(input1_):
             if translation_settings.char_level:
                 words = list(line.decode('utf-8').strip())
             else:
                 words = line.strip().split()
 
-            x = []
+            x1 = []
             for w in words:
-                w = [self._word_dicts[i][f] if f in self._word_dicts[i] else 1 for (i,f) in enumerate(w.split('|'))]
-                if len(w) != self._options[0]['factors']:
-                    logging.warning('Expected {0} factors, but input word has {1}\n'.format(self._options[0]['factors'], len(w)))
-                    for midx in xrange(self._num_processes):
-                        self._processes[midx].terminate()
-                    sys.exit(1)
-                x.append(w)
+                w = [self._word_dicts[0][f] if f in self._word_dicts[0] else 1 for (i,f) in enumerate(w.split('|'))]
+                x1.append(w)
 
-            x += [[0]*self._options[0]['factors']]
+            x1 += [[0]*self._options[0]['factors']]
+            source1_sentences.append(words)
 
+            line = input2_[idx]
+            if translation_settings.char_level:
+                words = list(line.decode('utf-8').strip())
+            else:
+                words = line.strip().split()
+
+            x2 = []
+            for w in words:
+                w = [self._word_dicts[1][f] if f in self._word_dicts[1] else 1 for (i,f) in enumerate(w.split('|'))]
+                x2.append(w)
+
+            x2 += [[0]*self._options[0]['factors']]
+            source2_sentences.append(words)
             input_item = QueueItem(verbose=self._verbose,
                                    return_hyp_graph=translation_settings.get_search_graph,
                                    return_alignment=translation_settings.get_alignment,
@@ -403,13 +416,13 @@ class Translator(object):
                                    normalization_alpha=translation_settings.normalization_alpha,
                                    nbest=translation_settings.n_best,
                                    max_ratio=translation_settings.max_ratio,
-                                   seq=x,
+                                   seq=[x1, x2],
                                    idx=idx,
                                    request_id=translation_settings.request_id)
 
             self._input_queue.put(input_item)
-            source_sentences.append(words)
-        return idx+1, source_sentences
+            
+        return idx+1, source1_sentences, source2_sentences
 
     def _retrieve_jobs(self, num_samples, request_id, timeout=5):
         """
@@ -442,12 +455,12 @@ class Translator(object):
 
     ### EXPOSED TRANSLATION FUNCTIONS ###
 
-    def translate(self, source_segments, translation_settings):
+    def translate(self, source1_segments, source2_segments, translation_settings):
         """
         Returns the translation of @param source_segments.
         """
-        logging.info('Translating {0} segments...\n'.format(len(source_segments)))
-        n_samples, source_sentences = self._send_jobs(source_segments, translation_settings)
+        logging.info('Translating {0} segments...\n'.format(len(source1_segments)))
+        n_samples, source1_sentences, source2_sentences = self._send_jobs(source1_segments, source2_segments, translation_settings)
 
         translations = []
         for i, trans in enumerate(self._retrieve_jobs(n_samples, translation_settings.request_id)):
@@ -460,7 +473,8 @@ class Translator(object):
                 for j in order:
                     current_alignment = None if not translation_settings.get_alignment else alignment[j]
                     translation = Translation(sentence_id=i,
-                                              source_words=source_sentences[i],
+                                              source1_words=source1_sentences[i],
+                                              source2_words=source2_sentences[i],
                                               target_words=seqs2words(samples[j], self._word_idict_trg, join=False),
                                               score=scores[j],
                                               alignment=current_alignment,
@@ -473,7 +487,8 @@ class Translator(object):
             else:
                 current_alignment = None if not translation_settings.get_alignment else alignment
                 translation = Translation(sentence_id=i,
-                                          source_words=source_sentences[i],
+                                          source1_words=source1_sentences[i],
+                                          source2_words=source2_sentences[i],
                                           target_words=seqs2words(samples, self._word_idict_trg, join=False),
                                           score=scores,
                                           alignment=current_alignment,
@@ -482,28 +497,34 @@ class Translator(object):
                 translations.append(translation)
         return translations
 
-    def translate_file(self, input_object, translation_settings):
+    def translate_file(self, input1_object, input2_object, translation_settings):
         """
         """
-        source_segments = input_object.readlines()
-        return self.translate(source_segments, translation_settings)
+        source1_segments = input1_object.readlines()
+        source2_segments = input2_object.readlines()
+        return self.translate(source1_segments, source2_segments, translation_settings)
 
 
-    def translate_string(self, segment, translation_settings):
+    def translate_string(self, segment1, segment2, translation_settings):
         """
         Translates a single segment
         """
-        if not segment.endswith('\n'):
-            segment += '\n'
-        source_segments = [segment]
-        return self.translate(source_segments, translation_settings)
+        if not segment1.endswith('\n'):
+            segment1 += '\n'
+        source1_segments = [segment1]
 
-    def translate_list(self, segments, translation_settings):
+        if not segment2.endswith('\n'):
+            segment2 += '\n'
+        source2_segments = [segment2]
+        return self.translate(source1_segments, source2_segments, translation_settings)
+
+    def translate_list(self, segments1, segments2, translation_settings):
         """
         Translates a list of segments
         """
-        source_segments = [s + '\n' if not s.endswith('\n') else s for s in segments]
-        return self.translate(source_segments, translation_settings)
+        source1_segments = [s + '\n' if not s.endswith('\n') else s for s in segments1]
+        source2_segments = [s + '\n' if not s.endswith('\n') else s for s in segments2]
+        return self.translate(source1_segments, source2_segments, translation_settings)
 
     ### FUNCTIONS FOR WRITING THE RESULTS ###
 
@@ -568,13 +589,13 @@ class Translator(object):
             for translation in translations:
                 self.write_translation(output_file, translation, translation_settings)
 
-def main(input_file, output_file, translation_settings):
+def main(input1_file, input2_file, output_file, translation_settings):
     """
     Translates a source language file (or STDIN) into a target language file
     (or STDOUT).
     """
     translator = Translator(translation_settings)
-    translations = translator.translate_file(input_file, translation_settings)
+    translations = translator.translate_file(input1_file, input2_file, translation_settings)
     translator.write_translations(output_file, translations, translation_settings)
 
     logging.info('Done')
@@ -584,9 +605,11 @@ def main(input_file, output_file, translation_settings):
 if __name__ == "__main__":
     # parse console arguments
     translation_settings = TranslationSettings(from_console_arguments=True)
-    input_file = translation_settings.input
+    files = translation_settings.input.split(',')
+    input1_file = files[0]
+    input2_file = files[1]
     output_file = translation_settings.output
     # start logging
     level = logging.DEBUG if translation_settings.verbose else logging.WARNING
     logging.basicConfig(level=level, format='%(levelname)s: %(message)s')
-    main(input_file, output_file, translation_settings)
+    main(input1_file, input2_file, output_file, translation_settings)

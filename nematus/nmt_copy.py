@@ -32,7 +32,7 @@ from theano_util import *
 from alignment_util import *
 from raml_distributions import *
 
-from layers import *
+from layers_copy import *
 from initializers import *
 from optimizers import *
 from metrics.scorer_provider import ScorerProvider
@@ -241,6 +241,17 @@ def init_params(options):
                                 weight_matrix = not options['tie_decoder_embeddings'],
                                 followed_by_softmax=True)
 
+    params = get_layer_param('ff')(options, params, prefix='ff_copy_lstm',
+                                nin=options['dim'], nout=1,
+                                ortho=False)
+    params = get_layer_param('ff')(options, params, prefix='ff_copy_prev',
+                                nin=options['dim_word'],
+                                nout=1, ortho=False)
+
+    params = get_layer_param('ff')(options, params, prefix='ff_copy_ctx',
+                                nin=ctxdim*2, nout=1,
+                                ortho=False)
+
     return params
 
 # initialize LM parameters (deep fusion)
@@ -423,6 +434,8 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
 
     # weights (alignment matrix)
     opt_ret['dec_alphas'] = proj[2]
+    alpha1 = proj[2] # (batch_size, length x1) copy_score
+    alpha2 = proj[3]
 
     # we return state of each layer
     if sampling:
@@ -555,7 +568,17 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
                             dropout_probability=options['dropout_hidden'],
                             prefix='ff_logit', activ='linear', W=logit_W, followed_by_softmax=True)
 
-    return logit, opt_ret, ret_state, lm_ret_state
+    copy_lstm = get_layer_constr('ff')(tparams, next_state, options, dropout,
+                                    dropout_probability=options['dropout_hidden'],
+                                    prefix='ff_copy_lstm', activ='linear')
+    copy_prev = get_layer_constr('ff')(tparams, emb, options, dropout,
+                                    dropout_probability=options['dropout_embedding'],
+                                    prefix='ff_copy_prev', activ='linear')
+    copy_ctx = get_layer_constr('ff')(tparams, ctxs, options, dropout,
+                                   dropout_probability=options['dropout_hidden'],
+                                   prefix='ff_copy_ctx', activ='linear')
+    pgen = tensor.sigmoid(copy_lstm+copy_prev+copy_ctx) # (y_len, batch_size, 1)
+    return logit, opt_ret, ret_state, lm_ret_state, pgen, alpha1
 
 # build a training model
 def build_model(tparams, options):
@@ -596,13 +619,16 @@ def build_model(tparams, options):
     if options['dec_depth'] > 1:
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
 
-    logit, opt_ret, _, _ = build_decoder(tparams, options, y, ctx1, ctx2, 
+    logit, opt_ret, _, _, pgen, copy_score = build_decoder(tparams, options, y, ctx1, ctx2, 
         init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, sampling=False)
 
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
                                                logit_shp[2]]))
 
+    pcopy = 1. - pgen
+    pgen = tensor.tile(pgen, (1, 1, options['n_words']))
+    pcopy = tensor.tile(pcopy, (1, 1, copy_score.shape[2]))
     # cost
     y_flat = y.flatten()
     y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
