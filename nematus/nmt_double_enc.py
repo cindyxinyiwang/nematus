@@ -283,7 +283,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
     else:
         x2r_mask = x2_mask[::-1]
 
-    n_timesteps = x1.shape[1]
+    n_timesteps1 = x1.shape[1]
+    n_timesteps2 = x2.shape[1]
     n_samples = x1.shape[2]
 
     # word embedding for forward rnn (source)
@@ -297,8 +298,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
     emb2r = get_layer_constr('embedding')(tparams, x2r, suffix='', factors= options['factors'])
 
     if options['use_dropout']:
-        source1_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
-        source2_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
+        source1_dropout = dropout((n_timesteps1, n_samples, 1), options['dropout_source'])
+        source2_dropout = dropout((n_timesteps2, n_samples, 1), options['dropout_source'])
         if not sampling:
             source1_dropout = tensor.tile(source1_dropout, (1,1,options['dim_word']))
             source2_dropout = tensor.tile(source2_dropout, (1,1,options['dim_word']))

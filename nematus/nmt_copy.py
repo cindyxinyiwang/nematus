@@ -32,7 +32,7 @@ from theano_util import *
 from alignment_util import *
 from raml_distributions import *
 
-from layers_copy import *
+from layers import *
 from initializers import *
 from optimizers import *
 from metrics.scorer_provider import ScorerProvider
@@ -294,7 +294,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
     else:
         x2r_mask = x2_mask[::-1]
 
-    n_timesteps = x1.shape[1]
+    n_timesteps1 = x1.shape[1]
+    n_timesteps2 = x2.shape[1]
     n_samples = x1.shape[2]
 
     # word embedding for forward rnn (source)
@@ -308,8 +309,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
     emb2r = get_layer_constr('embedding')(tparams, x2r, suffix='', factors= options['factors'])
 
     if options['use_dropout']:
-        source1_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
-        source2_dropout = dropout((n_timesteps, n_samples, 1), options['dropout_source'])
+        source1_dropout = dropout((n_timesteps1, n_samples, 1), options['dropout_source'])
+        source2_dropout = dropout((n_timesteps2, n_samples, 1), options['dropout_source'])
         if not sampling:
             source1_dropout = tensor.tile(source1_dropout, (1,1,options['dim_word']))
             source2_dropout = tensor.tile(source2_dropout, (1,1,options['dim_word']))
@@ -577,7 +578,7 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
     copy_ctx = get_layer_constr('ff')(tparams, ctxs, options, dropout,
                                    dropout_probability=options['dropout_hidden'],
                                    prefix='ff_copy_ctx', activ='linear')
-    pgen = tensor.sigmoid(copy_lstm+copy_prev+copy_ctx) # (y_len, batch_size, 1)
+    pgen = tensor.nnet.sigmoid(copy_lstm+copy_prev+copy_ctx) # (y_len, batch_size, 1)
     return logit, opt_ret, ret_state, lm_ret_state, pgen, alpha1
 
 # build a training model
@@ -599,6 +600,7 @@ def build_model(tparams, options):
     y_mask.tag.test_value = numpy.ones(shape=(8, 10)).astype(floatX)
 
     x1, x2, ctx1, ctx2 = build_encoder(tparams, options, dropout, x1_mask, x2_mask, sampling=False)
+    y_in_x = tensor.tensor3('y_in_x', dtype=floatX)
     n_samples = x1.shape[2]
 
     # mean of the context (across time) will be used to initialize decoder rnn
@@ -627,18 +629,22 @@ def build_model(tparams, options):
                                                logit_shp[2]]))
 
     pcopy = 1. - pgen
-    pgen = tensor.tile(pgen, (1, 1, options['n_words']))
-    pcopy = tensor.tile(pcopy, (1, 1, copy_score.shape[2]))
+    pgen = tensor.tile(pgen, (1, 1, options['n_words'])) # (timestep, batch_size, trg_vocab_size)
+    pgen = pgen.reshape([logit_shp[0]*logit_shp[1], logit_shp[2]])
+    pcopy = tensor.tile(pcopy, (1, 1, copy_score.shape[2])) # (timestep, batch_size, length_x1)
+
+    probs = probs*pgen
+    copy_prob = (copy_score*y_in_x).sum(axis=-1) #(timestep, batch_size)
     # cost
     y_flat = y.flatten()
     y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
-    cost = -tensor.log(probs.flatten()[y_flat_idx])
+    cost = -tensor.log(probs.flatten()[y_flat_idx] + copy_prob.flatten())
     cost = cost.reshape([y.shape[0], y.shape[1]])
     cost = (cost * y_mask).sum(0)
 
     #print "Print out in build_model()"
     #print opt_ret
-    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost, y_in_x
 
 
 # build a sampler
@@ -647,6 +653,7 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     dropout = dropout_constr(options, use_noise, trng, sampling=True)
 
     x1, x2, ctx1, ctx2 = build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, sampling=True)
+    x_to_y_vocab = tensor.matrix('x_to_y_vocab', dtype = 'float32')
     n_samples = x1.shape[2]
 
     # get the input for decoder rnn initializer mlp
@@ -681,11 +688,19 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     if options['deep_fusion_lm']:
         lm_init_state = tensor.matrix('lm_init_state', dtype=floatX)
 
-    logit, opt_ret, ret_state, lm_ret_state = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
+    logit, opt_ret, ret_state, lm_ret_state, pgen, copy_score = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
 
     # compute the softmax probability
-    next_probs = tensor.nnet.softmax(logit)
+    probs = tensor.nnet.softmax(logit)
+    pcopy = 1. - pgen
+    pgen = tensor.tile(pgen, (1, options['n_words'])) # (timestep, batch_size, trg_vocab_size)
+    pcopy = tensor.tile(pcopy, (1, copy_score.shape[1])) # (timestep, batch_size, length_x1)
 
+    copy_score *= pcopy
+    copy_prob = tensor.dot(copy_score, x_to_y_vocab)
+    probs = probs*pgen
+
+    next_probs = probs + copy_prob
     # sample from softmax distribution to get the sample
     next_sample = trng.multinomial(pvals=next_probs).argmax(1)
 
@@ -693,10 +708,10 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     # sampled word for the next target, next hidden state to be used
     logging.info('Building f_next..')
     if options['deep_fusion_lm']:
-        inps = [y, ctx1, ctx2, init_state, lm_init_state]
+        inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, lm_init_state]
         outs = [next_probs, next_sample, ret_state, lm_ret_state]
     else:
-        inps = [y, ctx1, ctx2, init_state]
+        inps = [y, ctx1, ctx2, x_to_y_vocab, init_state]
         outs = [next_probs, next_sample, ret_state]
 
     if return_alignment:
@@ -837,7 +852,7 @@ def build_full_sampler(tparams, options, use_noise, trng, greedy=False):
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
-def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=30,
+def gen_sample(f_init, f_next, x, x_to_y_vocab, model_options=[None], trng=None, k=1, maxlen=30,
                stochastic=True, argmax=False, return_alignment=False, suppress_unk=False,
                return_hyp_graph=False):
 
@@ -909,12 +924,12 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             next_state[i] = numpy.transpose(next_state[i], (1,0,2))
 
             if 'deep_fusion_lm' in model_options and model_options['deep_fusion_lm']:
-                inps = [next_w, ctx1, ctx2, next_state[i], lm_next_state[i]]
+                inps = [next_w, ctx1, ctx2, x_to_y_vocab, next_state[i], lm_next_state[i]]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i], lm_next_state[i] = ret[0], ret[1], ret[2], ret[3]
             else:
-                inps = [next_w, ctx1, ctx2, next_state[i]]
+                inps = [next_w, ctx1, ctx2, x_to_y_vocab, next_state[i]]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i] = ret[0], ret[1], ret[2]
@@ -1107,16 +1122,22 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'],
                                             n_factors=options['factors'])
-
+        y_in_x = numpy.zeros((y.shape[0], y.shape[1], x1.shape[1])) # (y_length, batch_size, x_length)
+        for i in range(y.shape[0]):
+            y_in_x[i, :, :] = (y[i, :] == x1[0]).transpose()
+        xmask1t = x1_mask.transpose() # (batch_size, x_length)
+        y_in_x *= xmask1t.reshape((1, xmask1t.shape[0], xmask1t.shape[1]))
+        y_in_x *= y_mask.reshape((y_mask.shape[0], y_mask.shape[1], 1))
+        y_in_x = y_in_x.astype(numpy.float32)
         ### in optional save weights mode.
         if alignweights:
-            pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask)
+            pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
             for jdata in get_alignments(attention1, x1_mask, y_mask):
                 alignments1_json.append(jdata)
             for jdata in get_alignments(attention2, x2_mask, y_mask):
                 alignments2_json.append(jdata)
         else:
-            pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask)
+            pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
 
         # normalize scores according to output length
         if normalization_alpha:
@@ -1493,10 +1514,10 @@ def train(dim_word=512,  # word vector dimensionality
     trng, use_noise, \
         x1, x1_mask, x2, x2_mask, y, y_mask, \
         opt_ret, \
-        cost = \
+        cost, y_in_x = \
         build_model(tparams, model_options)
 
-    inps = [x1, x1_mask, x2, x2_mask, y, y_mask]
+    inps = [x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x]
 
     if validFreq or sampleFreq:
         logging.info('Building sampler')
@@ -1632,17 +1653,24 @@ def train(dim_word=512,  # word vector dimensionality
                     sample_weights = [1.0] * len(y)
                 
                 if multi_src:
-                  xlen = len(x[0])
-                  n_samples += xlen
-                  x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
+                    xlen = len(x[0])
+                    n_samples += xlen
+                    x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
                                                                       n_words=n_words)
+                    y_in_x = numpy.zeros((y.shape[0], y.shape[1], x1.shape[1])) # (y_length, batch_size, x_length)
+                    for i in range(y.shape[0]):
+                        y_in_x[i, :, :] = (y[i, :] == x1[0]).transpose()
+                    xmask1t = x1_mask.transpose() # (batch_size, x_length)
+                    y_in_x *= xmask1t.reshape((1, xmask1t.shape[0], xmask1t.shape[1]))
+                    y_in_x *= y_mask.reshape((y_mask.shape[0], y_mask.shape[1], 1))
+                    y_in_x = y_in_x.astype(numpy.float32)
                 else:
-                  xlen = len(x)
-                  n_samples += xlen
-                  x, x_mask, y, y_mask, sample_weights = prepare_data(x, y, weights=sample_weights,
+                    xlen = len(x)
+                    n_samples += xlen
+                    x, x_mask, y, y_mask, sample_weights = prepare_data(x, y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
@@ -1665,7 +1693,7 @@ def train(dim_word=512,  # word vector dimensionality
                     cost = f_update(lrate, x, x_mask, y, y_mask, sample_weights)
                 else:
                     if multi_src:
-                      cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask)
+                      cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
                     else:
                       cost = f_update(lrate, x, x_mask, y, y_mask)
                 cost_sum += cost
