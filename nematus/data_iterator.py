@@ -315,7 +315,7 @@ class MultiSrcTextIterator:
                     if self.use_factor:
                         w = [self.source_dicts[i][f] if f in self.source_dicts[i] else 1 for (i,f) in enumerate(w.split('|'))]
                     else:
-                        w = [self.source_dicts[1][w] if w in self.source_dicts[0] else 1]
+                        w = [self.source_dicts[1][w] if w in self.source_dicts[1] else 1]
                     tmp.append(w)
                 ss2 = tmp
 

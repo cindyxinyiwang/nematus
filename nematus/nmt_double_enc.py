@@ -1583,6 +1583,7 @@ def train(dim_word=512,  # word vector dimensionality
     cost_batches = 0
     last_disp_samples = 0
     last_words = 0
+    trg_words = 0
     ud_start = time.time()
     p_validation = None
     for training_progress.eidx in xrange(training_progress.eidx, max_epochs):
@@ -1631,10 +1632,10 @@ def train(dim_word=512,  # word vector dimensionality
                 cost_batches += 1
                 last_disp_samples += xlen
                 if multi_src:
-                  last_words += (numpy.sum(x1_mask) + numpy.sum(x2_mask) + numpy.sum(y_mask))/2.0
+                  last_words += (numpy.sum(x1_mask) + numpy.sum(x2_mask) + numpy.sum(y_mask))/3.0
                 else:
                   last_words += (numpy.sum(x_mask) + numpy.sum(y_mask))/2.0
-
+                trg_words += numpy.sum(y_mask)
                 # compute cost, grads and update parameters
                 if model_options['objective'] == 'RAML':
                     cost = f_update(lrate, x, x_mask, y, y_mask, sample_weights)
@@ -1711,7 +1712,7 @@ def train(dim_word=512,  # word vector dimensionality
                     cost_batches += 1
                     last_disp_samples += xlen
                     last_words += (numpy.sum(x_mask) + numpy.sum(y_mask))/2.0
-
+                    trg_words += numpy.sum(y_mask)
                     # map integers to words (for character-level metrics)
                     samples = [seqs2words(sample, worddicts_r[-1]) for sample in samples]
                     y_s = seqs2words(y_s, worddicts_r[-1])
@@ -1741,11 +1742,13 @@ def train(dim_word=512,  # word vector dimensionality
                 sps = last_disp_samples / float(ud)
                 wps = last_words / float(ud)
                 cost_avg = cost_sum / float(cost_batches)
+                cost_per_word = cost_sum / float(trg_words)
                 logging.info(
-                    'Epoch {epoch} Update {update} Cost {cost} UD {ud} {sps} {wps}'.format(
+                    'Epoch {epoch} Update {update} Cost {cost} Cost/word {cost_per_word} UD {ud} {sps} {wps}'.format(
                         epoch=training_progress.eidx,
                         update=training_progress.uidx,
                         cost=cost_avg,
+                        cost_per_word=cost_per_word,
                         ud=ud,
                         sps="{0:.2f} sents/s".format(sps),
                         wps="{0:.2f} words/s".format(wps)
@@ -1756,6 +1759,7 @@ def train(dim_word=512,  # word vector dimensionality
                 last_disp_samples = 0
                 last_words = 0
                 cost_sum = 0
+                trg_words = 0
 
             # save the best model so far, in addition, save the latest model
             # into a separate file with the iteration number for external eval
