@@ -1864,15 +1864,29 @@ def train(dim_word=512,  # word vector dimensionality
                     for pos in range(x1.shape[1]):
                         if x1[0, pos, jj] == 0:
                             break
-                        for i in range(2):
-                            vv = x1[factor, pos, jj]
-                            if vv in worddicts_r[i]:
-                                sys.stdout.write(worddicts_r[i][vv])
-                            else:
-                                sys.stdout.write('UNK')
-                            sys.stdout.write(' ')
-                            print
+                        factor = 0
+                        vv = x1[factor, pos, jj]
+                        if vv in worddicts_r[i]:
+                            sys.stdout.write(worddicts_r[i][vv])
+                        else:
+                            sys.stdout.write('UNK')
+                        sys.stdout.write(' ')
+                        print
                     print
+
+                    for pos in range(x2.shape[1]):
+                        if x2[0, pos, jj] == 0:
+                            break
+                        factor = 1
+                        vv = x2[factor, pos, jj]
+                        if vv in worddicts_r[i]:
+                            sys.stdout.write(worddicts_r[i][vv])
+                        else:
+                            sys.stdout.write('UNK')
+                        sys.stdout.write(' ')
+                        print
+                    print  
+                                     
                     print 'Truth ', jj, ' : ',
                     for vv in y[:, jj]:
                         if vv == 0:
