@@ -1851,8 +1851,14 @@ def train(dim_word=512,  # word vector dimensionality
                     x1_current = x1_current[:,:x1_mask.astype('int64')[:, jj].sum(),:]
                     x2_current = x2_current[:,:x2_mask.astype('int64')[:, jj].sum(),:]
 
+                    x_to_y_vocab = numpy.zeros((len(x1_current[0]), model_options['n_words'])) # (x_length, num_vocab_trg)
+                    for i in range(len(x1_current[0])):
+                        x_to_y_vocab[i, x1_current[0][i]] = 1.
+                    x_to_y_vocab = x_to_y_vocab.astype(numpy.float32)
+
                     sample, score, sample_word_probs, alignment, hyp_graph = gen_sample([f_init], [f_next],
                                                [x1_current, x2_current],
+                                               x_to_y_vocab,
                                                model_options,
                                                trng=trng, k=1,
                                                maxlen=30,
@@ -1860,31 +1866,32 @@ def train(dim_word=512,  # word vector dimensionality
                                                argmax=False,
                                                suppress_unk=False,
                                                return_hyp_graph=False)
-                    print 'Source ', jj, ': ',
+                    print 'Source1 ', jj, ': ',
                     for pos in range(x1.shape[1]):
                         if x1[0, pos, jj] == 0:
                             break
                         factor = 0
-                        vv = x1[factor, pos, jj]
-                        if vv in worddicts_r[i]:
-                            sys.stdout.write(worddicts_r[i][vv])
+                        vv = x1[0, pos, jj]
+                        if vv in worddicts_r[factor]:
+                            sys.stdout.write(worddicts_r[factor][vv])
                         else:
                             sys.stdout.write('UNK')
                         sys.stdout.write(' ')
-                        print
+                        #print
                     print
 
+                    print 'Source2 ', jj, ': ',
                     for pos in range(x2.shape[1]):
                         if x2[0, pos, jj] == 0:
                             break
                         factor = 1
-                        vv = x2[factor, pos, jj]
-                        if vv in worddicts_r[i]:
-                            sys.stdout.write(worddicts_r[i][vv])
+                        vv = x2[0, pos, jj]
+                        if vv in worddicts_r[factor]:
+                            sys.stdout.write(worddicts_r[factor][vv])
                         else:
                             sys.stdout.write('UNK')
                         sys.stdout.write(' ')
-                        print
+                        #print
                     print  
                                      
                     print 'Truth ', jj, ' : ',
@@ -1909,6 +1916,7 @@ def train(dim_word=512,  # word vector dimensionality
                             print worddicts_r[-1][vv],
                         else:
                             print 'UNK',
+                    print
                     print
 
             # validate model on validation set and early stop if necessary

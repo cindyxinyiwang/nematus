@@ -1807,32 +1807,32 @@ def train(dim_word=512,  # word vector dimensionality
                                                argmax=False,
                                                suppress_unk=False,
                                                return_hyp_graph=False)
-                    print 'Source ', jj, ': ',
+                    print 'Source1 ', jj, ': ',
                     for pos in range(x1.shape[1]):
                         if x1[0, pos, jj] == 0:
                             break
                         factor = 0
-                        vv = x1[factor, pos, jj]
+                        vv = x1[0, pos, jj]
                         if vv in worddicts_r[factor]:
                             sys.stdout.write(worddicts_r[factor][vv])
                         else:
                             sys.stdout.write('UNK')
                         sys.stdout.write(' ')
-                        print
+                        #print
                     print
 
-                    print 'Source ', jj, ': ',
+                    print 'Source2 ', jj, ': ',
                     for pos in range(x2.shape[1]):
                         if x2[0, pos, jj] == 0:
                             break
                         factor = 1
-                        vv = x2[factor, pos, jj]
+                        vv = x2[0, pos, jj]
                         if vv in worddicts_r[factor]:
                             sys.stdout.write(worddicts_r[factor][vv])
                         else:
                             sys.stdout.write('UNK')
                         sys.stdout.write(' ')
-                        print
+                        #print
                     print
 
                     print 'Truth ', jj, ' : ',
@@ -1857,6 +1857,7 @@ def train(dim_word=512,  # word vector dimensionality
                             print worddicts_r[-1][vv],
                         else:
                             print 'UNK',
+                    print
                     print
 
             # validate model on validation set and early stop if necessary

@@ -8,7 +8,7 @@
 
 mkdir -p models
 
-THEANO_FLAGS=optimizer=None python ../nematus/nmt_double_enc.py \
+THEANO_FLAGS=optimizer=None python ../nematus/nmt_copy.py \
   --model models/model.npz \
   --datasets data/train.src,data/train1.src data/train.trg \
   --dictionaries data/train.src.json data/train.src.json data/train.trg.json \
@@ -27,4 +27,5 @@ THEANO_FLAGS=optimizer=None python ../nematus/nmt_double_enc.py \
   --valid_batch_size 2 \
   --validFreq 2 \
   --decoder gru_double_cond \
+  --sampleFreq 2 \
   --finish_after 10
