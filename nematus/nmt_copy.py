@@ -1839,7 +1839,7 @@ def train(dim_word=512,  # word vector dimensionality
             # generate some samples with the model and display them
             if sampleFreq and numpy.mod(training_progress.uidx, sampleFreq) == 0:
                 # FIXME: random selection?
-                for jj in xrange(numpy.minimum(5, x.shape[2])):
+                for jj in xrange(numpy.minimum(5, x1.shape[2])):
                     stochastic = True
                     x1_current = x1[:, :, jj][:, :, None]
                     x2_current = x2[:, :, jj][:, :, None]
