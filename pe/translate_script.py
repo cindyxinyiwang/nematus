@@ -108,7 +108,7 @@ def get_settings(model, beam):
     translation_settings.beam_width = beam
     translation_settings.normalization_alpha = 1.0
     translation_settings.suppress_unk = True
-    translation_settings.get_word_probs = True
+    translation_settings.get_word_probs = False
     return translation_settings
 
 
@@ -128,7 +128,6 @@ if __name__ == '__main__':
 
     translation_settings = get_settings(args.model, args.beam_size)
 
-    '''
     if args.model_type == 'base':
         translate(
         input_file=open(args.input_file),
@@ -155,7 +154,7 @@ if __name__ == '__main__':
         else:
             print "model type unsupported"
             exit(1)
-    '''
+
     if args.reference:
         if args.postprocess == 'bpe':
             tmp = args.output_file + '.tmp'

@@ -1916,7 +1916,7 @@ def train(dim_word=512,  # word vector dimensionality
                 training_progress.estop = True
                 break
 
-        logging.info('Seen %d samples' % n_samples)
+        #logging.info('Seen %d samples' % n_samples)
 
         if training_progress.estop:
             break
