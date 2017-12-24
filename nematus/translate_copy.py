@@ -361,7 +361,7 @@ class Translator(object):
         if max_ratio:
           maxlen = int(max_ratio * len(seq))
 
-        x_to_y_vocab = numpy.zeros((len(seq[0]), self._options[0]['n_words_trg'])) # (x_length, num_vocab_trg)
+        x_to_y_vocab = numpy.zeros((len(seq[0]), self._options[0]['n_words'])) # (x_length, num_vocab_trg)
         for i in range(len(seq[0])):
             x_to_y_vocab[i, seq[0][i]] = 1.
         x_to_y_vocab = x_to_y_vocab.astype(numpy.float32)
