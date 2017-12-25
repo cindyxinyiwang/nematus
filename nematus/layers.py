@@ -802,7 +802,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 
     dim = tparams[pp(prefix, 'Wcx')].shape[1]
 
-    rec_dropout = dropout((n_samples, dim), dropout_probability_rec, num= 1 + 2 * recurrence_transition_depth)
+    rec_dropout = dropout((n_samples, dim), dropout_probability_rec, num= 2 + 2 * recurrence_transition_depth)
     
     # utility function to look up parameters and apply weight normalization if enabled
     def wn(param_name):
@@ -885,7 +885,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         alpha1 = alpha1 / alpha1.sum(0, keepdims=True)
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
-        pstate2_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att2')))
+        pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
         pctx2__ = pctx2_ + pstate2_[None, :, :]
         #pctx__ += xc_
         pctx2__ = tensor.tanh(pctx2__)
@@ -902,7 +902,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         for i in xrange(recurrence_transition_depth - 1):
             suffix = '' if i == 0 else ('_drt_%s' % i)
 
-            preact2 = tensor.dot(h2_prev*rec_dropout[3+2*i], wn(pp(prefix, 'U_nl'+suffix)))+tparams[pp(prefix, 'b_nl'+suffix)]
+            preact2 = tensor.dot(h2_prev*rec_dropout[4+2*i], wn(pp(prefix, 'U_nl'+suffix)))+tparams[pp(prefix, 'b_nl'+suffix)]
             if options['layer_normalisation']:
                 preact2 = layer_norm(preact2, tparams[pp(prefix, 'U_nl%s_lnb' % suffix)], tparams[pp(prefix, 'U_nl%s_lns' % suffix)])
             if i == 0:
@@ -916,7 +916,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
             r2 = _slice(preact2, 0, dim)
             u2 = _slice(preact2, 1, dim)
 
-            preactx2 = tensor.dot(h2_prev*rec_dropout[4+2*i], wn(pp(prefix, 'Ux_nl'+suffix)))+tparams[pp(prefix, 'bx_nl'+suffix)]
+            preactx2 = tensor.dot(h2_prev*rec_dropout[5+2*i], wn(pp(prefix, 'Ux_nl'+suffix)))+tparams[pp(prefix, 'bx_nl'+suffix)]
             if options['layer_normalisation']:
                preactx2 = layer_norm(preactx2, tparams[pp(prefix, 'Ux_nl%s_lnb' % suffix)], tparams[pp(prefix, 'Ux_nl%s_lns' % suffix)])
             preactx2 *= r2
