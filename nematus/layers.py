@@ -715,8 +715,10 @@ def param_init_gru_double_cond(options, params, prefix='gru_cond',
                 params[pp(prefix,'Wcx%s_wns') % suffix] = scale_mul * numpy.ones((1*dim)).astype(floatX)          
 
     # attention: combined -> hidden
-    W_comb_att = norm_weight(dim, dimctx)
-    params[pp(prefix, 'W_comb_att')] = W_comb_att
+    W_comb_att1 = norm_weight(dim, dimctx)
+    params[pp(prefix, 'W_comb_att1')] = W_comb_att1
+    W_comb_att2 = norm_weight(dim, dimctx)
+    params[pp(prefix, 'W_comb_att2')] = W_comb_att2
 
     # attention: context -> hidden
     Wc1_att = norm_weight(dimctx)
@@ -869,10 +871,10 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         h1 = m_[:, None] * h1 + (1. - m_)[:, None] * h_
 
         # attention
-        pstate_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att')))
+        pstate1_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att1')))
         if options['layer_normalisation']:
-            pstate_ = layer_norm(pstate_, tparams[pp(prefix, 'W_comb_att_lnb')], tparams[pp(prefix, 'W_comb_att_lns')])
-        pctx1__ = pctx1_ + pstate_[None, :, :]
+            pstate1_ = layer_norm(pstate1_, tparams[pp(prefix, 'W_comb_att_lnb')], tparams[pp(prefix, 'W_comb_att_lns')])
+        pctx1__ = pctx1_ + pstate1_[None, :, :]
         #pctx__ += xc_
         pctx1__ = tensor.tanh(pctx1__)
         alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))+tparams[pp(prefix, 'c1_tt')]
@@ -883,7 +885,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         alpha1 = alpha1 / alpha1.sum(0, keepdims=True)
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
-        pctx2__ = pctx2_ + pstate_[None, :, :]
+        pstate2_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att2')))
+        pctx2__ = pctx2_ + pstate2_[None, :, :]
         #pctx__ += xc_
         pctx2__ = tensor.tanh(pctx2__)
         alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
