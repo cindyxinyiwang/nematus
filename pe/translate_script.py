@@ -7,6 +7,7 @@ import unittest
 import requests
 import argparse
 import subprocess
+import logging
 
 sys.path.append(os.path.abspath('../nematus'))
 from translate_double_enc import main as translate_double_enc
@@ -161,5 +162,6 @@ if __name__ == '__main__':
             subprocess.check_call(["sed", "s/\@\@ //g", args.output_file], stdout=open(tmp, 'w') )
             subprocess.check_call(['cp', tmp, args.output_file])
             subprocess.check_call(['rm', tmp])
-        subprocess.check_call(['../data/multi-bleu.perl', '-lc', args.reference], stdin=open(args.output_file))
+        bleu = subprocess.check_output(['../data/multi-bleu.perl', '-lc', args.reference], stdin=open(args.output_file))
+        logging.info(bleu)
 
