@@ -217,7 +217,29 @@ class MultiSrcTextIterator:
         self.source2_buffer = []
         self.target_buffer = []
         self.k = batch_size * maxibatch_size
-        
+
+        '''
+        ts = []
+        for s in self.source1:
+            ts.append(s)
+        print len(ts)
+        self.source1.seek(0)
+
+        ts = []
+        for s in self.source2:
+            ts.append(s)
+        print len(ts)
+        self.source2.seek(0)
+
+        ts = []
+        tss = []
+        for s, ss in zip(self.source1, self.source2):
+            ts.append(s)
+            tss.append(ss)
+        print len(ts), len(tss)
+        self.source1.seek(0)
+        self.source2.seek(0)      
+        '''
 
         self.end_of_data = False
 
@@ -251,11 +273,11 @@ class MultiSrcTextIterator:
         assert len(self.source2_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
 
         if len(self.source1_buffer) == 0:
-            for ss1, ss2 in zip(self.source1, self.source2):
+            for ss1 in self.source1:
                 ss1 = ss1.split()
-                ss2 = ss2.split()
+                ss2 = self.source2.readline().split()
                 tt = self.target.readline().split()
-                
+
                 if self.skip_empty and (len(ss1) == 0 or len(ss2) == 0 or len(tt) == 0):
                     continue
                 if len(ss1) > self.maxlen or len(ss2) > self.maxlen or len(tt) > self.maxlen:
@@ -270,6 +292,7 @@ class MultiSrcTextIterator:
             if len(self.source1_buffer) == 0 or len(self.source2_buffer) == 0 or len(self.target_buffer) == 0:
                 self.end_of_data = False
                 self.reset()
+                print len(self.source1_buffer), len(self.source2_buffer), len(self.target_buffer)
                 raise StopIteration
 
             # sort by target buffer
