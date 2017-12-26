@@ -716,9 +716,9 @@ def param_init_gru_double_cond(options, params, prefix='gru_cond',
 
     # attention: combined -> hidden
     W_comb_att1 = norm_weight(dim, dimctx)
-    params[pp(prefix, 'W_comb_att1')] = W_comb_att1
-    W_comb_att2 = norm_weight(dim, dimctx)
-    params[pp(prefix, 'W_comb_att2')] = W_comb_att2
+    params[pp(prefix, 'W_comb_att')] = W_comb_att1
+    #W_comb_att2 = norm_weight(dim, dimctx)
+    #params[pp(prefix, 'W_comb_att2')] = W_comb_att2
 
     # attention: context -> hidden
     Wc1_att = norm_weight(dimctx)
@@ -813,8 +813,9 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
             return param
 
     below_dropout = dropout((n_samples, dim_below),  dropout_probability_below, num=2)
-    ctx1_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=4)
-    ctx2_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=4)
+    ctx1_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=2)
+    ctx2_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=2)
+    ctx_dropout = dropout((n_samples, 4*options['dim']), dropout_probability_ctx, num=2)
 
     # initial/previous state
     if init_state is None:
@@ -845,7 +846,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
     state_below_ = tensor.dot(state_below*below_dropout[1], wn(pp(prefix, 'W'))) +\
         tparams[pp(prefix, 'b')]
 
-    def _step_slice(m_, x_, xx_, h_, ctx_, alpha1_, alpha2_, pctx1_, pctx2_, cc1_, cc2_, rec_dropout, ctx1_dropout, ctx2_dropout):
+    def _step_slice(m_, x_, xx_, h_, ctx_, alpha1_, alpha2_, pctx1_, pctx2_, cc1_, cc2_, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout):
         if options['layer_normalisation']:
             x_ = layer_norm(x_, tparams[pp(prefix, 'W_lnb')], tparams[pp(prefix, 'W_lns')])
             xx_ = layer_norm(xx_, tparams[pp(prefix, 'Wx_lnb')], tparams[pp(prefix, 'Wx_lns')])
@@ -871,7 +872,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         h1 = m_[:, None] * h1 + (1. - m_)[:, None] * h_
 
         # attention
-        pstate1_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att1')))
+        pstate1_ = tensor.dot(h1*rec_dropout[2], wn(pp(prefix, 'W_comb_att')))
         if options['layer_normalisation']:
             pstate1_ = layer_norm(pstate1_, tparams[pp(prefix, 'W_comb_att_lnb')], tparams[pp(prefix, 'W_comb_att_lns')])
         pctx1__ = pctx1_ + pstate1_[None, :, :]
@@ -885,8 +886,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         alpha1 = alpha1 / alpha1.sum(0, keepdims=True)
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
-        pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
-        pctx2__ = pctx2_ + pstate2_[None, :, :]
+        #pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
+        pctx2__ = pctx2_ + pstate1_[None, :, :]
         #pctx__ += xc_
         pctx2__ = tensor.tanh(pctx2__)
         alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
@@ -906,8 +907,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
             if options['layer_normalisation']:
                 preact2 = layer_norm(preact2, tparams[pp(prefix, 'U_nl%s_lnb' % suffix)], tparams[pp(prefix, 'U_nl%s_lns' % suffix)])
             if i == 0:
-                ctxf_ = tensor.concatenate([ctx1_*ctx1_dropout[2], ctx2_*ctx2_dropout[2]], axis=1)
-                ctxf_ = tensor.dot(ctxf_, wn(pp(prefix, 'Wc'+suffix))) # dropout mask is shared over mini-steps
+                #ctxf_ = tensor.concatenate([ctx1_*ctx1_dropout[2], ctx2_*ctx2_dropout[2]], axis=1)
+                ctxf_ = tensor.dot(ctx_*ctx_dropout[0], wn(pp(prefix, 'Wc'+suffix))) # dropout mask is shared over mini-steps
                 if options['layer_normalisation']:
                     ctxf_ = layer_norm(ctxf_, tparams[pp(prefix, 'Wc%s_lnb' % suffix)], tparams[pp(prefix, 'Wc%s_lns' % suffix)])
                 preact2 += ctxf_
@@ -921,8 +922,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
                preactx2 = layer_norm(preactx2, tparams[pp(prefix, 'Ux_nl%s_lnb' % suffix)], tparams[pp(prefix, 'Ux_nl%s_lns' % suffix)])
             preactx2 *= r2
             if i == 0:
-                ctxs_ = tensor.concatenate([ctx1_*ctx1_dropout[3], ctx2_*ctx2_dropout[3]], axis=1)
-                ctxs_ = tensor.dot(ctxs_, wn(pp(prefix, 'Wcx'+suffix))) # dropout mask is shared over mini-steps
+                #ctxs_ = tensor.concatenate([ctx1_*ctx1_dropout[3], ctx2_*ctx2_dropout[3]], axis=1)
+                ctxs_ = tensor.dot(ctx_*ctx_dropout[1], wn(pp(prefix, 'Wcx'+suffix))) # dropout mask is shared over mini-steps
                 if options['layer_normalisation']:
                     ctxs_ = layer_norm(ctxs_, tparams[pp(prefix, 'Wcx%s_lnb' % suffix)], tparams[pp(prefix, 'Wcx%s_lns' % suffix)])
                 preactx2 += ctxs_
@@ -941,7 +942,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
     shared_vars = []
 
     if one_step:
-        rval = _step(*(seqs + [init_state, None, None, None, pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout] +
+        rval = _step(*(seqs + [init_state, None, None, None, pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout] +
                        shared_vars))
     else:
         rval, updates = theano.scan(_step,
@@ -953,7 +954,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
                                                                context1.shape[0])),
                                                   tensor.zeros((n_samples,
                                                                context2.shape[0]))],
-                                    non_sequences=[pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout]+shared_vars,
+                                    non_sequences=[pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout]+shared_vars,
                                     name=pp(prefix, '_layers'),
                                     n_steps=nsteps,
                                     truncate_gradient=truncate_gradient,
