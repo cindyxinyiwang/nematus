@@ -6,6 +6,7 @@ import sys
 import json
 import cPickle as pkl
 import numpy
+import logging
 from collections import OrderedDict
 
 import theano
