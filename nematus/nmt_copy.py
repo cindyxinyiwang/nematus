@@ -634,7 +634,7 @@ def build_model(tparams, options):
     pcopy = tensor.tile(pcopy, (1, 1, copy_score.shape[2])) # (timestep, batch_size, length_x1)
 
     probs = probs*pgen
-    copy_prob = (copy_score*y_in_x).sum(axis=-1) #(timestep, batch_size)
+    copy_prob = (copy_score*y_in_x*pcopy).sum(axis=-1) #(timestep, batch_size)
     # cost
     y_flat = y.flatten()
     y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
@@ -691,16 +691,19 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     logit, opt_ret, ret_state, lm_ret_state, pgen, copy_score = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
 
     # compute the softmax probability
-    probs = tensor.nnet.softmax(logit)
-    pcopy = 1. - pgen
-    pgen = tensor.tile(pgen, (1, options['n_words'])) # (timestep, batch_size, trg_vocab_size)
-    pcopy = tensor.tile(pcopy, (1, copy_score.shape[1])) # (timestep, batch_size, length_x1)
+    probs = tensor.nnet.softmax(logit)  # (batch_size, trg_vocab_size)
 
-    copy_score *= pcopy
-    copy_prob = tensor.dot(copy_score, x_to_y_vocab)
+    pcopy = 1. - pgen
+    pgen = tensor.tile(pgen, (1, options['n_words'])) # (batch_size[1], trg_vocab_size)
+    pcopy = tensor.tile(pcopy, (1, copy_score.shape[1])) # (batch_size[1], length_x1)
+
     probs = probs*pgen
 
+    copy_score *= pcopy  # (batch_size[1], length_x1)
+    copy_prob = tensor.dot(copy_score, x_to_y_vocab)
+
     next_probs = probs + copy_prob
+
     # sample from softmax distribution to get the sample
     next_sample = trng.multinomial(pvals=next_probs).argmax(1)
 
@@ -1668,6 +1671,9 @@ def train(dim_word=512,  # word vector dimensionality
                     y_in_x *= xmask1t.reshape((1, xmask1t.shape[0], xmask1t.shape[1]))
                     y_in_x *= y_mask.reshape((y_mask.shape[0], y_mask.shape[1], 1))
                     y_in_x = y_in_x.astype(numpy.float32)
+                    #print y_in_x
+                    #print y
+                    #print x1
                 else:
                     xlen = len(x)
                     n_samples += xlen

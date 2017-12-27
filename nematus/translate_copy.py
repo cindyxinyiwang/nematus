@@ -366,9 +366,13 @@ class Translator(object):
             x_to_y_vocab[i, seq[0][i]] = 1.
         x_to_y_vocab = x_to_y_vocab.astype(numpy.float32)
 
+        #print seq[0]
+        #print seq[1]
+        #print x_to_y_vocab
+
         return gen_sample(fs_init, fs_next,
                           [numpy.array(seq[0]).T.reshape(
-                              [len(seq[0][0]), len(seq[0]), 1]),
+                              [len(seq[0][0]), len(seq[0]), 1]), # (# factor * # word * # batchsize)
                           numpy.array(seq[1]).T.reshape(
                               [len(seq[1][0]), len(seq[1]), 1])],
                           x_to_y_vocab,

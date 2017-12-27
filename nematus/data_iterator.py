@@ -292,7 +292,6 @@ class MultiSrcTextIterator:
             if len(self.source1_buffer) == 0 or len(self.source2_buffer) == 0 or len(self.target_buffer) == 0:
                 self.end_of_data = False
                 self.reset()
-                print len(self.source1_buffer), len(self.source2_buffer), len(self.target_buffer)
                 raise StopIteration
 
             # sort by target buffer

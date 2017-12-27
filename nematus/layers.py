@@ -883,7 +883,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
         alpha1 = tensor.exp(alpha1 - alpha1.max(0, keepdims=True))
         if context_mask1:
             alpha1 = alpha1 * context_mask1
-        alpha1 = alpha1 / alpha1.sum(0, keepdims=True)
+        alpha1 = alpha1 / alpha1.sum(0, keepdims=True)  # (annotation, sample[batch_size])
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
         pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
