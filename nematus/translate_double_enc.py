@@ -494,8 +494,8 @@ class Translator(object):
                 translations.append(n_best_list)
             # single-best translation
             else:
-                current_alignment1 = None if not translation_settings.get_alignment else alignment1[j]
-                current_alignment2 = None if not translation_settings.get_alignment else alignment2[j]
+                current_alignment1 = None if not translation_settings.get_alignment else alignment1
+                current_alignment2 = None if not translation_settings.get_alignment else alignment2
                 translation = Translation(sentence_id=i,
                                           source1_words=source1_sentences[i],
                                           source2_words=source2_sentences[i],

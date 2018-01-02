@@ -1824,7 +1824,7 @@ def train(dim_word=512,  # word vector dimensionality
                     x1_current = x1_current[:,:x1_mask.astype('int64')[:, jj].sum(),:]
                     x2_current = x2_current[:,:x2_mask.astype('int64')[:, jj].sum(),:]
 
-                    sample, score, sample_word_probs, alignment, hyp_graph = gen_sample([f_init], [f_next],
+                    sample, score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
                                                [x1_current, x2_current],
                                                model_options,
                                                trng=trng, k=1,
