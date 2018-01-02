@@ -648,7 +648,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
     return rval
 
 # Conditional GRU layer with Attention
-def param_init_gru_double_cond(options, params, prefix='gru_cond',
+def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
                         nin=None, dim=None, dimctx=None,
                         nin_nonlin=None, dim_nonlin=None,
                         recurrence_transition_depth=2):
@@ -768,7 +768,7 @@ def param_init_gru_double_cond(options, params, prefix='gru_cond',
     return params
 
 
-def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru',
+def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_double_cond',
                    mask=None, context1=None, context2=None, one_step=False,
                    init_memory=None, init_state=None,
                    context_mask1=None,

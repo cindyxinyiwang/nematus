@@ -164,7 +164,8 @@ def init_params(options):
     params = OrderedDict()
 
     # embedding
-    params = get_layer_param('embedding')(options, params, options['n_words_src'], options['dim_per_factor'], options['factors'], suffix='')
+    params = get_layer_param('embedding')(options, params, options['n_words_src'], options['dim_per_factor'], options['factors'], suffix='_enc1')
+    params = get_layer_param('embedding')(options, params, options['n_words_src'], options['dim_per_factor'], options['factors'], suffix='_enc2')
     if not options['tie_encoder_decoder_embeddings']:
         params = get_layer_param('embedding')(options, params, options['n_words'], options['dim_word'], suffix='_dec')
 
@@ -293,14 +294,14 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
     n_samples = x1.shape[2]
 
     # word embedding for forward rnn (source)
-    emb1 = get_layer_constr('embedding')(tparams, x1, suffix='', factors= options['factors'])
+    emb1 = get_layer_constr('embedding')(tparams, x1, suffix='_enc1', factors= options['factors'])
 
     # word embedding for backward rnn (source)
-    emb1r = get_layer_constr('embedding')(tparams, x1r, suffix='', factors= options['factors'])
+    emb1r = get_layer_constr('embedding')(tparams, x1r, suffix='_enc1', factors= options['factors'])
 
-    emb2 = get_layer_constr('embedding')(tparams, x2, suffix='', factors= options['factors'])
+    emb2 = get_layer_constr('embedding')(tparams, x2, suffix='_enc2', factors= options['factors'])
 
-    emb2r = get_layer_constr('embedding')(tparams, x2r, suffix='', factors= options['factors'])
+    emb2r = get_layer_constr('embedding')(tparams, x2r, suffix='_enc2', factors= options['factors'])
 
     if options['use_dropout']:
         source1_dropout = dropout((n_timesteps1, n_samples, 1), options['dropout_source'])
@@ -357,8 +358,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
     if options['encoder'].startswith('lstm'):
         proj1[0] = get_slice(proj1[0], 0, options['dim'])
         proj1r[0] = get_slice(proj1r[0], 0, options['dim'])
-        proj2[0] = get_slice(proj1[0], 0, options['dim'])
-        proj2r[0] = get_slice(proj1r[0], 0, options['dim'])
+        proj2[0] = get_slice(proj2[0], 0, options['dim'])
+        proj2r[0] = get_slice(proj2r[0], 0, options['dim'])
 
     # context will be the concatenation of forward and backward rnns
     ctx1 = concatenate([proj1[0], proj1r[0][::-1]], axis=proj1[0].ndim-1)
@@ -1971,42 +1972,6 @@ def train(dim_word=512,  # word vector dimensionality
                 logging.info('Valid {}'.format(valid_err))
 
                 if bleu:
-                    '''
-                    # save current model progress
-                    logging.info('Saving the current model at iteration {}...'.format(training_progress.uidx))
-                    saveto_uidx = '{}.cur.npz'.format(
-                        os.path.splitext(saveto)[0])
-                    params = unzip_from_theano(tparams, excluding_prefix='prior_')
-                    optimizer_params = unzip_from_theano(optimizer_tparams, excluding_prefix='prior_')
-                    save(params, optimizer_params, training_progress, saveto_uidx)
-                    json.dump(model_options, open('%s.cur.npz.json' % os.path.splitext(saveto)[0], 'wb'), indent=2)
-                    logging.info('Done')
-                    # calculate bleu score
-                    valid_input = valid_datasets[0].split(',')
-                    input1, input2 = valid_input[0],valid_input[1]
-    
-                    translation_settings = TranslationSettings()
-                    translation_settings.models = [saveto_uidx]
-                    translation_settings.num_processes = 1
-                    translation_settings.beam_width = 12
-                    translation_settings.normalization_alpha = 1.0
-                    translation_settings.suppress_unk = True
-                    translation_settings.get_word_probs = False
-                    output_file = saveto + '.trans'
-                    translate_double_enc(
-                        input1_file=open(input1),
-                        input2_file=open(input2),
-                        output_file=open(output_file, 'w'),
-                        translation_settings=translation_settings
-                    )
-                    
-                    if postprocess == 'bpe':
-                        logging.info("BPE!")
-                        tmp = output_file + '.tmp'
-                        subprocess.check_call(["sed", "s/\@\@ //g", output_file], stdout=open(tmp, 'w') )
-                        subprocess.check_call(['cp', tmp, output_file])
-                        subprocess.check_call(['rm', tmp])
-                    '''
                     translations = get_translation(f_init, f_next, prepare_data_multi_src, model_options, valid, trng)
                     output_file = saveto + '.trans'
                     valid_output = open(output_file, 'w')
