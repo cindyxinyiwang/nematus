@@ -23,6 +23,11 @@ from subprocess import Popen
 
 from collections import OrderedDict
 
+import util
+from translate_double_enc import main as translate_double_enc
+from settings import TranslationSettings
+import subprocess
+
 profile = False
 
 from data_iterator import TextIterator, MultiSrcTextIterator
@@ -423,7 +428,8 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
     ctxs = proj[1]
 
     # weights (alignment matrix)
-    opt_ret['dec_alphas'] = proj[2]
+    opt_ret['dec_alphas1'] = proj[2]
+    opt_ret['dec_alphas2'] = proj[3]
 
     # we return state of each layer
     if sampling:
@@ -675,7 +681,8 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
         outs = [next_probs, next_sample, ret_state]
 
     if return_alignment:
-        outs.append(opt_ret['dec_alphas'])
+        outs.append(opt_ret['dec_alphas1'])
+        outs.append(opt_ret['dec_alphas2'])
 
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     logging.info('Done')
@@ -822,10 +829,12 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             'Beam search does not support stochastic sampling with argmax'
     x1 = x[0]
     x2 = x[1]
+    #print x1, x2
     sample = []
     sample_score = []
     sample_word_probs = []
-    alignment = []
+    alignment1 = []
+    alignment2 = []
     hyp_graph = None
     if stochastic:
         if argmax:
@@ -845,7 +854,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
     hyp_scores = numpy.zeros(live_k).astype(floatX)
     hyp_states = []
     if return_alignment:
-        hyp_alignment = [[] for _ in xrange(live_k)]
+        hyp_alignment1 = [[] for _ in xrange(live_k)]
+        hyp_alignment2 = [[] for _ in xrange(live_k)]
 
     # for ensemble decoding, we keep track of states and probability distribution
     # for each model in the ensemble
@@ -855,7 +865,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
     ctx01 = [None]*num_models
     ctx02 = [None]*num_models
     next_p = [None]*num_models
-    dec_alphas = [None]*num_models
+    dec_alphas1 = [None]*num_models
+    dec_alphas2 = [None]*num_models
     # get initial state of decoder rnn and encoder context
     for i in xrange(num_models):
         ret = f_init[i](x1, x2)
@@ -897,7 +908,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 lm_next_state[i] = [None]*live_k
 
             if return_alignment:
-                dec_alphas[i] = ret[3]
+                dec_alphas1[i] = ret[3]
+                dec_alphas2[i] = ret[4]
 
             # to more easily manipulate batch size, go from (layers, batch_size, dim) to (batch_size, layers, dim)
             next_state[i] = numpy.transpose(next_state[i], (1,0,2))
@@ -969,7 +981,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
 
             #averaging the attention weights accross models
             if return_alignment:
-                mean_alignment = sum(dec_alphas)/num_models
+                mean_alignment1 = sum(dec_alphas1)/num_models
+                mean_alignment2 = sum(dec_alphas2)/num_models
 
             voc_size = next_p[0].shape[1]
             # index of each k-best hypothesis
@@ -986,7 +999,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 # holds the history of attention weights for each time step for each of the surviving hypothesis
                 # dimensions (live_k * target_words * source_hidden_units]
                 # at each time step we append the attention weights corresponding to the current target word
-                new_hyp_alignment = [[] for _ in xrange(k-dead_k)]
+                new_hyp_alignment1 = [[] for _ in xrange(k-dead_k)]
+                new_hyp_alignment2 = [[] for _ in xrange(k-dead_k)]
 
             # ti -> index of k-best hypothesis
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
@@ -997,9 +1011,14 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 new_hyp_lm_states.append([copy.copy(lm_next_state[i][ti]) for i in xrange(num_models)])
                 if return_alignment:
                     # get history of attention weights for the current hypothesis
-                    new_hyp_alignment[idx] = copy.copy(hyp_alignment[ti])
+                    new_hyp_alignment1[idx] = copy.copy(hyp_alignment1[ti])
                     # extend the history with current attention weights
-                    new_hyp_alignment[idx].append(mean_alignment[ti])
+                    new_hyp_alignment1[idx].append(mean_alignment1[ti])
+
+                    # get history of attention weights for the current hypothesis
+                    new_hyp_alignment2[idx] = copy.copy(hyp_alignment2[ti])
+                    # extend the history with current attention weights
+                    new_hyp_alignment2[idx].append(mean_alignment2[ti])
 
             # check the finished samples
             new_live_k = 0
@@ -1009,7 +1028,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             hyp_lm_states = []
             word_probs = []
             if return_alignment:
-                hyp_alignment = []
+                hyp_alignment1 = []
+                hyp_alignment2 = []
 
             # sample and sample_score hold the k-best translations and their scores
             for idx in xrange(len(new_hyp_samples)):
@@ -1023,7 +1043,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                     sample_score.append(new_hyp_scores[idx])
                     sample_word_probs.append(new_word_probs[idx])
                     if return_alignment:
-                        alignment.append(new_hyp_alignment[idx])
+                        alignment1.append(new_hyp_alignment1[idx])
+                        alignment2.append(new_hyp_alignment2[idx])
                     dead_k += 1
                 else:
                     new_live_k += 1
@@ -1033,7 +1054,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                     hyp_lm_states.append(copy.copy(new_hyp_lm_states[idx]))
                     word_probs.append(new_word_probs[idx])
                     if return_alignment:
-                        hyp_alignment.append(new_hyp_alignment[idx])
+                        hyp_alignment1.append(new_hyp_alignment1[idx])
+                        hyp_alignment2.append(new_hyp_alignment2[idx])
             hyp_scores = numpy.array(hyp_scores)
 
             live_k = new_live_k
@@ -1057,9 +1079,10 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 alignment.append(hyp_alignment[idx])
 
     if not return_alignment:
-        alignment = [None for i in range(len(sample))]
+        alignment1 = [None for i in range(len(sample))]
+        alignment2 = [None for i in range(len(sample))]
 
-    return sample, sample_score, sample_word_probs, alignment, hyp_graph
+    return sample, sample_score, sample_word_probs, alignment1, alignment2, hyp_graph
 
 
 # calculate the log probablities on a given corpus using translation model
@@ -1261,6 +1284,9 @@ def train(dim_word=512,  # word vector dimensionality
           layer_normalisation=False, # layer normalisation https://arxiv.org/abs/1607.06450
           weight_normalisation=False, # normalize weights
           multi_src=0,
+
+          bleu=False,
+          postprocess=None
     ):
 
     # Model options
@@ -1910,6 +1936,45 @@ def train(dim_word=512,  # word vector dimensionality
 
                 logging.info('Valid {}'.format(valid_err))
 
+                if bleu:
+                    # save current model progress
+                    logging.info('Saving the current model at iteration {}...'.format(training_progress.uidx))
+                    saveto_uidx = '{}.cur.npz'.format(
+                        os.path.splitext(saveto)[0])
+                    params = unzip_from_theano(tparams, excluding_prefix='prior_')
+                    optimizer_params = unzip_from_theano(optimizer_tparams, excluding_prefix='prior_')
+                    save(params, optimizer_params, training_progress, saveto_uidx)
+                    json.dump(model_options, open('%s.cur.npz.json' % os.path.splitext(saveto)[0], 'wb'), indent=2)
+                    logging.info('Done')
+                    # calculate bleu score
+                    valid_input = valid_datasets[0].split(',')
+                    input1, input2 = valid_input[0],valid_input[1]
+    
+                    translation_settings = TranslationSettings()
+                    translation_settings.models = [saveto_uidx]
+                    translation_settings.num_processes = 1
+                    translation_settings.beam_width = 12
+                    translation_settings.normalization_alpha = 1.0
+                    translation_settings.suppress_unk = True
+                    translation_settings.get_word_probs = False
+                    output_file = saveto + '.trans'
+                    translate_double_enc(
+                        input1_file=open(input1),
+                        input2_file=open(input2),
+                        output_file=open(output_file, 'w'),
+                        translation_settings=translation_settings
+                    )
+                    
+                    if postprocess == 'bpe':
+                        logging.info("BPE!")
+                        tmp = output_file + '.tmp'
+                        subprocess.check_call(["sed", "s/\@\@ //g", output_file], stdout=open(tmp, 'w') )
+                        subprocess.check_call(['cp', tmp, output_file])
+                        subprocess.check_call(['rm', tmp])
+    
+                    valid_refs = util.get_ref_files(valid_datasets[1])
+                    bleu = 100 * util.bleu_file(saveto + '.trans', valid_refs)
+                    logging.info('Valid bleu {}\n'.format(bleu))
                 if external_validation_script:
                     logging.info("Calling external validation script")
                     if p_validation is not None and p_validation.poll() is None:
@@ -2135,6 +2200,10 @@ if __name__ == '__main__':
                          help="interpolation increment to be applied each time patience runs out, until maximum amount of interpolation is reached (default: %(default)s)")
     domain_interpolation.add_argument('--domain_interpolation_indomain_datasets', type=str, metavar='PATH', nargs=2,
                          help="indomain parallel training corpus (source and target)")
+
+    decode = parser.add_argument_group('decoding')
+    decode.add_argument('--bleu', action="store_true")
+    decode.add_argument('--postprocess', type=str, help="post process: (bpe)")
 
     args = parser.parse_args()
 

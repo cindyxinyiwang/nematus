@@ -8,10 +8,10 @@
 
 mkdir -p models
 
-THEANO_FLAGS=optimizer=None python ../nematus/nmt_copy.py \
-  --model models/model.npz \
-  --datasets data/train.src,data/train1.src data/train.trg \
-  --dictionaries data/train.src.json data/train.src.json data/train.trg.json \
+THEANO_FLAGS=optimizer=None python ../nematus/nmt_double_enc.py \
+  --model models/model_double_enc.npz \
+  --datasets data/3train.src,data/3train1.src data/3train.trg \
+  --dictionaries data/train.trg.json data/train1.src.json data/train.trg.json \
   --multi_src \
   --dim_word 256 \
   --dim 512 \
@@ -20,12 +20,15 @@ THEANO_FLAGS=optimizer=None python ../nematus/nmt_copy.py \
   --maxlen 50 \
   --optimizer adam \
   --lrate 0.0001 \
-  --batch_size 40 \
+  --batch_size 1 \
   --no_shuffle \
   --dispFreq 1 \
   --valid_datasets data/test.src,data/test1.src data/test.trg \
   --valid_batch_size 2 \
   --validFreq 2 \
   --decoder gru_double_cond \
-  --sampleFreq 2 \
-  --finish_after 10
+  --finish_after 30 \
+  --maxibatch_size 4 \
+  --no_shuffle \
+  --bleu \
+  --postprocess bpe

@@ -18,10 +18,15 @@ import time
 import logging
 
 import itertools
+import subprocess
 
 from subprocess import Popen
 
 from collections import OrderedDict
+
+import util
+from translate_copy import main as translate_copy
+from settings import TranslationSettings
 
 profile = False
 
@@ -1310,6 +1315,9 @@ def train(dim_word=512,  # word vector dimensionality
           layer_normalisation=False, # layer normalisation https://arxiv.org/abs/1607.06450
           weight_normalisation=False, # normalize weights
           multi_src=0,
+
+          bleu=False,
+          postprocess=None
     ):
 
     # Model options
@@ -1975,6 +1983,46 @@ def train(dim_word=512,  # word vector dimensionality
 
                 logging.info('Valid {}'.format(valid_err))
 
+                if bleu:
+                    # save current model progress
+                    logging.info('Saving the current model at iteration {}...'.format(training_progress.uidx))
+                    saveto_uidx = '{}.cur.npz'.format(
+                        os.path.splitext(saveto)[0])
+                    params = unzip_from_theano(tparams, excluding_prefix='prior_')
+                    optimizer_params = unzip_from_theano(optimizer_tparams, excluding_prefix='prior_')
+                    save(params, optimizer_params, training_progress, saveto_uidx)
+                    json.dump(model_options, open('%s.cur.npz.json' % os.path.splitext(saveto)[0], 'wb'), indent=2)
+                    logging.info('Done')
+                    # calculate bleu score
+                    valid_input = valid_datasets[0].split(',')
+                    input1, input2 = valid_input[0],valid_input[1]
+    
+                    translation_settings = TranslationSettings()
+                    translation_settings.models = [saveto_uidx]
+                    translation_settings.num_processes = 1
+                    translation_settings.beam_width = 12
+                    translation_settings.normalization_alpha = 1.0
+                    translation_settings.suppress_unk = True
+                    translation_settings.get_word_probs = False
+                    output_file = saveto + '.trans'
+                    translate_copy(
+                        input1_file=open(input1),
+                        input2_file=open(input2),
+                        output_file=open(output_file, 'w'),
+                        translation_settings=translation_settings
+                    )
+                    
+                    if postprocess == 'bpe':
+                        logging.info("BPE!")
+                        tmp = output_file + '.tmp'
+                        subprocess.check_call(["sed", "s/\@\@ //g", output_file], stdout=open(tmp, 'w') )
+                        subprocess.check_call(['cp', tmp, output_file])
+                        subprocess.check_call(['rm', tmp])
+    
+                    valid_refs = util.get_ref_files(valid_datasets[1])
+                    bleu = 100 * util.bleu_file(saveto + '.trans', valid_refs)
+                    logging.info('Valid bleu {}\n'.format(bleu))
+
                 if external_validation_script:
                     logging.info("Calling external validation script")
                     if p_validation is not None and p_validation.poll() is None:
@@ -2200,6 +2248,10 @@ if __name__ == '__main__':
                          help="interpolation increment to be applied each time patience runs out, until maximum amount of interpolation is reached (default: %(default)s)")
     domain_interpolation.add_argument('--domain_interpolation_indomain_datasets', type=str, metavar='PATH', nargs=2,
                          help="indomain parallel training corpus (source and target)")
+
+    decode = parser.add_argument_group('decoding')
+    decode.add_argument('--bleu', action="store_true")
+    decode.add_argument('--postprocess', type=str, help="post process: (bpe)")
 
     args = parser.parse_args()
 

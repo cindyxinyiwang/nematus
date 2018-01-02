@@ -23,20 +23,21 @@ class Translation(object):
     """
     Models a translated segment.
     """
-    def __init__(self, source1_words, source2_words, target_words, sentence_id=None, score=0, alignment=None,
-                 target_probs=None, hyp_graph=None, hypothesis_id=None):
+    def __init__(self, source1_words, source2_words, target_words, sentence_id=None, score=0, alignment1=None,
+                 alignment2=None, target_probs=None, hyp_graph=None, hypothesis_id=None):
         self.source1_words = source1_words
         self.source2_words = source2_words
         self.target_words = target_words
         self.sentence_id = sentence_id
         self.score = score
-        self.alignment = alignment #TODO: assertion of length?
+        self.alignment1 = alignment1 #TODO: assertion of length?
+        self.alignment2 = alignment2
         self.target_probs = target_probs #TODO: assertion of length?
         self.hyp_graph = hyp_graph
         self.hypothesis_id = hypothesis_id
 
     def get_alignment(self):
-        return self.alignment
+        return [self.alignment1, self.alignment2]
 
     def get_alignment_text(self):
         """
@@ -45,24 +46,29 @@ class Translation(object):
                            source words ||| number of source words |||
                            number of target words
         """
-        columns = [
-            self.sentence_id,
-            " ".join(self.target_words),
-            self.score,
-            " ".join(self.source_words),
-            len(self.source_words) + 1,
-            len(self.target_words) + 1
-        ]
-        header = "{0} ||| {1} ||| {2} ||| {3} ||| {4} {5}\n".format(*columns)
+        def _get_align(source_words, target_words, alignment):
+            columns = [
+                self.sentence_id,
+                " ".join(target_words),
+                self.score,
+                " ".join(source_words),
+                len(source_words) + 1,
+                len(target_words) + 1
+            ]
+            header = "{0} ||| {1} ||| {2} ||| {3} ||| {4} {5}\n".format(*columns)
+    
+            matrix = []
+            for target_word_alignment in alignment:
+                current_weights = []
+                for weight in target_word_alignment:
+                    current_weights.append(str(weight))
+                matrix.append(" ".join(current_weights))
+    
+            return header + "\n".join(matrix)
 
-        matrix = []
-        for target_word_alignment in self.alignment:
-            current_weights = []
-            for weight in target_word_alignment:
-                current_weights.append(str(weight))
-            matrix.append(" ".join(current_weights))
-
-        return header + "\n".join(matrix)
+        text1 = _get_align(self.source1_words, self.target_words, self.alignment1)
+        text2 = _get_align(self.source2_words, self.target_words, self.alignment2)
+        return [text1, text2]
 
     def get_alignment_json(self, as_string=True):
         """
@@ -328,19 +334,19 @@ class Translator(object):
         logging.debug('{0} - {1}\n'.format(process_id, idx))
 
         # sample given an input sequence and obtain scores
-        sample, score, word_probs, alignment, hyp_graph = self._sample(input_item, trng, fs_init, fs_next, gen_sample)
+        sample, score, word_probs, alignment1, alignment2, hyp_graph = self._sample(input_item, trng, fs_init, fs_next, gen_sample)
 
         # normalize scores according to sequence lengths
         if normalization_alpha:
             adjusted_lengths = numpy.array([len(s) ** normalization_alpha for s in sample])
             score = score / adjusted_lengths
         if nbest is True:
-            output_item = sample, score, word_probs, alignment, hyp_graph
+            output_item = sample, score, word_probs, alignment1, alignment2, hyp_graph
         else:
             # return translation with lowest score only
             sidx = numpy.argmin(score)
             output_item = sample[sidx], score[sidx], word_probs[
-                sidx], alignment[sidx], hyp_graph
+                sidx], alignment1[sidx], alignment2[sidx], hyp_graph
 
         return output_item
 
@@ -360,6 +366,7 @@ class Translator(object):
         maxlen = 200 #TODO: should be configurable
         if max_ratio:
           maxlen = int(max_ratio * len(seq))
+        #print seq 
 
         return gen_sample(fs_init, fs_next,
                           [numpy.array(seq[0]).T.reshape(
@@ -465,19 +472,21 @@ class Translator(object):
         translations = []
         for i, trans in enumerate(self._retrieve_jobs(n_samples, translation_settings.request_id)):
 
-            samples, scores, word_probs, alignment, hyp_graph = trans
+            samples, scores, word_probs, alignment1, alignment2, hyp_graph = trans
             # n-best list
             if translation_settings.n_best is True:
                 order = numpy.argsort(scores)
                 n_best_list = []
                 for j in order:
-                    current_alignment = None if not translation_settings.get_alignment else alignment[j]
+                    current_alignment1 = None if not translation_settings.get_alignment else alignment1[j]
+                    current_alignment2 = None if not translation_settings.get_alignment else alignment2[j]
                     translation = Translation(sentence_id=i,
                                               source1_words=source1_sentences[i],
                                               source2_words=source2_sentences[i],
                                               target_words=seqs2words(samples[j], self._word_idict_trg, join=False),
                                               score=scores[j],
-                                              alignment=current_alignment,
+                                              alignment1=current_alignment1,
+                                              alignment2=current_alignment2,
                                               target_probs=word_probs[j],
                                               hyp_graph=hyp_graph,
                                               hypothesis_id=j)
@@ -485,13 +494,15 @@ class Translator(object):
                 translations.append(n_best_list)
             # single-best translation
             else:
-                current_alignment = None if not translation_settings.get_alignment else alignment
+                current_alignment1 = None if not translation_settings.get_alignment else alignment1[j]
+                current_alignment2 = None if not translation_settings.get_alignment else alignment2[j]
                 translation = Translation(sentence_id=i,
                                           source1_words=source1_sentences[i],
                                           source2_words=source2_sentences[i],
                                           target_words=seqs2words(samples, self._word_idict_trg, join=False),
                                           score=scores,
-                                          alignment=current_alignment,
+                                          alignment1=current_alignment1,
+                                          alignment2=current_alignment2,
                                           target_probs=word_probs,
                                           hyp_graph=hyp_graph)
                 translations.append(translation)
@@ -536,7 +547,7 @@ class Translator(object):
         if translation_settings.json_alignment:
             output_file.write(translation.get_alignment_json() + "\n")
         else:
-            output_file.write(translation.get_alignment_text() + "\n\n")
+            output_file.write('\n'.join(translation.get_alignment_text()) + "\n\n")
 
     def write_translation(self, output_file, translation, translation_settings):
         """
