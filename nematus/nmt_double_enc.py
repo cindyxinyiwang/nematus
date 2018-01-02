@@ -1128,6 +1128,40 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
 
     return numpy.array(probs), alignments1_json, alignments2_json
 
+def get_translation(f_init, f_next, prepare_data_multi_src, options, iterator, trng):
+    translations = []
+    n_done = 0
+    #assert options['valid_batch_size'] == 1
+
+    for x, y in iterator:
+        #ensure consistency in number of factors
+        #if len(x[0][0]) != options['factors']:
+        #    logging.error('Mismatch between number of factors in settings ({0}), and number in validation corpus ({1})\n'.format(options['factors'], len(x[0][0])))
+        #    sys.exit(1)
+
+        n_done += len(x)
+
+        x1, x1_mask, x2, x2_mask, y, y_mask = prepare_data_multi_src(x[0], x[1], y,
+                                            n_words_src=options['n_words_src'],
+                                            n_words=options['n_words'],
+                                            n_factors=options['factors'])
+
+        sample, sample_score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
+                    [x1, x2],
+                    options,
+                    trng=trng, k=12,
+                    maxlen=50,
+                    stochastic=False,
+                    argmax=False,
+                    suppress_unk=False,
+                    return_hyp_graph=False)
+        score = sample_score / numpy.array([len(s) for s in sample])
+        ss = sample[score.argmin()]
+        translations.append(ss)
+
+    logging.debug('%d sentences translated' % (n_done))
+
+    return translations
 
 def augment_raml_data(x, y, tgt_worddict, options):
     #augment data with copies, of which the targets will be perturbed
@@ -1937,6 +1971,7 @@ def train(dim_word=512,  # word vector dimensionality
                 logging.info('Valid {}'.format(valid_err))
 
                 if bleu:
+                    '''
                     # save current model progress
                     logging.info('Saving the current model at iteration {}...'.format(training_progress.uidx))
                     saveto_uidx = '{}.cur.npz'.format(
@@ -1971,9 +2006,26 @@ def train(dim_word=512,  # word vector dimensionality
                         subprocess.check_call(["sed", "s/\@\@ //g", output_file], stdout=open(tmp, 'w') )
                         subprocess.check_call(['cp', tmp, output_file])
                         subprocess.check_call(['rm', tmp])
-    
+                    '''
+                    translations = get_translation(f_init, f_next, prepare_data_multi_src, model_options, valid, trng)
+                    output_file = saveto + '.trans'
+                    valid_output = open(output_file, 'w')
+                    if postprocess == 'bpe':
+                        for i, t in enumerate(translations):
+                            sent = []
+                            for vv in t:
+                                if vv == 0:
+                                    break
+                                if vv in worddicts_r[-1]:
+                                    sent.append(worddicts_r[-1][vv])
+                                else:
+                                    sent.append('UNK')
+                            t = ' '.join(sent)
+                            t = t.replace('@@ ', '')
+                            print >> valid_output, t
+                    valid_output.close()
                     valid_refs = util.get_ref_files(valid_datasets[1])
-                    bleu = 100 * util.bleu_file(saveto + '.trans', valid_refs)
+                    bleu = 100 * util.bleu_file(output_file, valid_refs)
                     logging.info('Valid bleu {}\n'.format(bleu))
                 if external_validation_script:
                     logging.info("Calling external validation script")
