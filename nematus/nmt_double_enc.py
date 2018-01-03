@@ -1167,6 +1167,8 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
         idx = numpy.argmin(score)
         ss = sample[idx]
         translations.append(ss)
+    input1.close()
+    input2.close()
     return translations
 
 def augment_raml_data(x, y, tgt_worddict, options):
@@ -1993,6 +1995,7 @@ def train(dim_word=512,  # word vector dimensionality
                     valid_refs = util.get_ref_files(valid_ref)
                     bleu = 100 * util.bleu_file(output_file, valid_refs)
                     logging.info('Valid bleu {}\n'.format(bleu))
+
                 if external_validation_script:
                     logging.info("Calling external validation script")
                     if p_validation is not None and p_validation.poll() is None:
