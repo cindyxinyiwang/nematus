@@ -1129,25 +1129,32 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
 
     return numpy.array(probs), alignments1_json, alignments2_json
 
-def get_translation(f_init, f_next, prepare_data_multi_src, options, iterator, trng):
+def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
     translations = []
     n_done = 0
     #assert options['valid_batch_size'] == 1
+    source = datasets[0].split(',')
+    input1 = open(source[0], 'r')
+    input2 = open(source[1], 'r')
+    for l1 in input1:
+        l2 = input2.readline()
 
-    for x, y in iterator:
-        #ensure consistency in number of factors
-        #if len(x[0][0]) != options['factors']:
-        #    logging.error('Mismatch between number of factors in settings ({0}), and number in validation corpus ({1})\n'.format(options['factors'], len(x[0][0])))
-        #    sys.exit(1)
+        x1 = []
+        for w in l1.split():
+            w = [dictionaries[0][f] if f in dictionaries[0] else 1 for (i,f) in enumerate(w.split('|'))]
+            x1.append(w)
+        x1 += [[0]*options['factors']]
 
-        n_done += len(x)
+        x2 = []
+        for w in l2.split():
+            w = [dictionaries[1][f] if f in dictionaries[1] else 1 for (i,f) in enumerate(w.split('|'))]
+            x2.append(w)
+        x2 += [[0]*options['factors']]
 
-        x1, x1_mask, x2, x2_mask, y, y_mask = prepare_data_multi_src(x[0], x[1], y,
-                                            n_words_src=options['n_words_src'],
-                                            n_words=options['n_words'],
-                                            n_factors=options['factors'])
+        x1 = numpy.array(x1).T.reshape([len(x1[0]), len(x1), 1])
+        x2 = numpy.array(x2).T.reshape([len(x2[0]), len(x2), 1])
 
-        sample, sample_score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
+        sample, score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
                     [x1, x2],
                     options,
                     trng=trng, k=12,
@@ -1156,12 +1163,10 @@ def get_translation(f_init, f_next, prepare_data_multi_src, options, iterator, t
                     argmax=False,
                     suppress_unk=False,
                     return_hyp_graph=False)
-        score = sample_score / numpy.array([len(s) for s in sample])
-        ss = sample[score.argmin()]
+        #score = score / numpy.array([len(s) for s in sample])
+        idx = numpy.argmin(score)
+        ss = sample[idx]
         translations.append(ss)
-
-    logging.debug('%d sentences translated' % (n_done))
-
     return translations
 
 def augment_raml_data(x, y, tgt_worddict, options):
@@ -1321,7 +1326,8 @@ def train(dim_word=512,  # word vector dimensionality
           multi_src=0,
 
           bleu=False,
-          postprocess=None
+          postprocess=None,
+          valid_ref=None
     ):
 
     # Model options
@@ -1972,24 +1978,19 @@ def train(dim_word=512,  # word vector dimensionality
                 logging.info('Valid {}'.format(valid_err))
 
                 if bleu:
-                    translations = get_translation(f_init, f_next, prepare_data_multi_src, model_options, valid, trng)
+                    translations = get_translation(f_init, f_next, model_options, valid_datasets, worddicts, trng)
+                    translations = [seqs2words(t, worddicts_r[-1]) for t in translations]
                     output_file = saveto + '.trans'
                     valid_output = open(output_file, 'w')
                     if postprocess == 'bpe':
                         for i, t in enumerate(translations):
-                            sent = []
-                            for vv in t:
-                                if vv == 0:
-                                    break
-                                if vv in worddicts_r[-1]:
-                                    sent.append(worddicts_r[-1][vv])
-                                else:
-                                    sent.append('UNK')
-                            t = ' '.join(sent)
                             t = t.replace('@@ ', '')
                             print >> valid_output, t
+                    else:
+                        for i, t in enumerate(translations):
+                            print >> valid_output, t
                     valid_output.close()
-                    valid_refs = util.get_ref_files(valid_datasets[1])
+                    valid_refs = util.get_ref_files(valid_ref)
                     bleu = 100 * util.bleu_file(output_file, valid_refs)
                     logging.info('Valid bleu {}\n'.format(bleu))
                 if external_validation_script:
@@ -2220,6 +2221,7 @@ if __name__ == '__main__':
 
     decode = parser.add_argument_group('decoding')
     decode.add_argument('--bleu', action="store_true")
+    decode.add_argument('--valid_ref', type=str, help="reference for bleu")
     decode.add_argument('--postprocess', type=str, help="post process: (bpe)")
 
     args = parser.parse_args()
