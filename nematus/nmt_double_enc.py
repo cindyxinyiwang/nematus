@@ -1391,6 +1391,8 @@ def train(dim_word=512,  # word vector dimensionality
         n_words = max(worddicts[-1].values()) + 1
         model_options['n_words'] = n_words
 
+
+
     if tie_encoder_decoder_embeddings:
         assert (n_words_src == n_words), "When tying encoder and decoder embeddings, source and target vocabulary size must the same"
         if worddicts[0] != worddicts[1]:
@@ -1980,8 +1982,8 @@ def train(dim_word=512,  # word vector dimensionality
                 logging.info('Valid {}'.format(valid_err))
 
                 if bleu:
-                    translations = get_translation(f_init, f_next, model_options, valid_datasets, worddicts, trng)
-                    translations = [seqs2words(t, worddicts_r[-1]) for t in translations]
+                    translations = get_translation(f_init, f_next, model_options, valid_datasets, valid.source_dicts, trng)
+                    translations = [seqs2words(t, valid.target_dict) for t in translations]
                     output_file = saveto + '.trans'
                     valid_output = open(output_file, 'w')
                     if postprocess == 'bpe':
