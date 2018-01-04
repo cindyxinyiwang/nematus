@@ -1983,7 +1983,8 @@ def train(dim_word=512,  # word vector dimensionality
 
                 if bleu:
                     translations = get_translation(f_init, f_next, model_options, valid_datasets, valid.source_dicts, trng)
-                    translations = [seqs2words(t, valid.target_dict) for t in translations]
+                    translations = [seqs2words(t, worddicts_r[-1]) for t in translations]
+
                     output_file = saveto + '.trans'
                     valid_output = open(output_file, 'w')
                     if postprocess == 'bpe':
