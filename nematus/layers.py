@@ -717,8 +717,8 @@ def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
     # attention: combined -> hidden
     W_comb_att1 = norm_weight(dim, dimctx)
     params[pp(prefix, 'W_comb_att1')] = W_comb_att1
-    W_comb_att2 = norm_weight(dim, dimctx)
-    params[pp(prefix, 'W_comb_att2')] = W_comb_att2
+    #W_comb_att2 = norm_weight(dim, dimctx)
+    #params[pp(prefix, 'W_comb_att2')] = W_comb_att2
 
     # attention: context -> hidden
     Wc1_att = norm_weight(dimctx)
@@ -886,8 +886,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         alpha1 = alpha1 / alpha1.sum(0, keepdims=True)  # (annotation, sample[batch_size])
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
-        pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
-        pctx2__ = pctx2_ + pstate2_[None, :, :]
+        #pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
+        pctx2__ = pctx2_ + pstate1_[None, :, :]
         #pctx__ += xc_
         pctx2__ = tensor.tanh(pctx2__)
         alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
