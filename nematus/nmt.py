@@ -23,6 +23,9 @@ from subprocess import Popen
 
 from collections import OrderedDict
 
+import util
+from settings import TranslationSettings
+import subprocess
 profile = False
 
 from data_iterator import TextIterator, MultiSrcTextIterator
@@ -1114,6 +1117,36 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True, norma
 
     return numpy.array(probs), alignments_json
 
+def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
+    translations = []
+    n_done = 0
+    #assert options['valid_batch_size'] == 1
+    source = datasets[0]
+    input1 = open(source, 'r')
+    for l1 in input1:
+        x1 = []
+        for w in l1.split():
+            w = [dictionaries[0][f] if f in dictionaries[0] else 1 for (i,f) in enumerate(w.split('|'))]
+            x1.append(w)
+        x1 += [[0]*options['factors']]
+
+        x1 = numpy.array(x1).T.reshape([len(x1[0]), len(x1), 1])
+
+        sample, score, sample_word_probs, alignment, hyp_graph = gen_sample([f_init], [f_next],
+                    x1,
+                    options,
+                    trng=trng, k=12,
+                    maxlen=50,
+                    stochastic=False,
+                    argmax=False,
+                    suppress_unk=False,
+                    return_hyp_graph=False)
+        #score = score / numpy.array([len(s) for s in sample])
+        idx = numpy.argmin(score)
+        ss = sample[idx]
+        translations.append(ss)
+    input1.close()
+    return translations
 
 def augment_raml_data(x, y, tgt_worddict, options):
     #augment data with copies, of which the targets will be perturbed
@@ -1270,6 +1303,10 @@ def train(dim_word=512,  # word vector dimensionality
           layer_normalisation=False, # layer normalisation https://arxiv.org/abs/1607.06450
           weight_normalisation=False, # normalize weights
           multi_src=0,
+
+          bleu=False,
+          postprocess=None,
+          valid_ref=None
     ):
 
     # Model options
@@ -1901,6 +1938,24 @@ def train(dim_word=512,  # word vector dimensionality
 
                 logging.info('Valid {}'.format(valid_err))
 
+                if bleu:
+                    translations = get_translation(f_init, f_next, model_options, valid_datasets, valid.source_dicts, trng)
+                    translations = [seqs2words(t, worddicts_r[-1]) for t in translations]
+
+                    output_file = saveto + '.trans'
+                    valid_output = open(output_file, 'w')
+                    if postprocess == 'bpe':
+                        for i, t in enumerate(translations):
+                            t = t.replace('@@ ', '')
+                            print >> valid_output, t
+                    else:
+                        for i, t in enumerate(translations):
+                            print >> valid_output, t
+                    valid_output.close()
+                    valid_refs = util.get_ref_files(valid_ref)
+                    bleu = 100 * util.bleu_file(output_file, valid_refs)
+                    logging.info('Valid bleu {}\n'.format(bleu))
+
                 if external_validation_script:
                     logging.info("Calling external validation script")
                     if p_validation is not None and p_validation.poll() is None:
@@ -2126,6 +2181,11 @@ if __name__ == '__main__':
                          help="interpolation increment to be applied each time patience runs out, until maximum amount of interpolation is reached (default: %(default)s)")
     domain_interpolation.add_argument('--domain_interpolation_indomain_datasets', type=str, metavar='PATH', nargs=2,
                          help="indomain parallel training corpus (source and target)")
+
+    decode = parser.add_argument_group('decoding')
+    decode.add_argument('--bleu', action="store_true")
+    decode.add_argument('--valid_ref', type=str, help="reference for bleu")
+    decode.add_argument('--postprocess', type=str, help="post process: (bpe)")
 
     args = parser.parse_args()
 
