@@ -701,9 +701,9 @@ def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
 
         # context to LSTM
         if i == 0:
-            Wc = norm_weight(2*dimctx, dim*2)
+            Wc = norm_weight(dimctx, dim*2)
             params[pp(prefix, 'Wc'+suffix)] = Wc
-            Wcx = norm_weight(2*dimctx, dim)
+            Wcx = norm_weight(dimctx, dim)
             params[pp(prefix, 'Wcx'+suffix)] = Wcx
             if options['layer_normalisation']:
                 params[pp(prefix,'Wc%s_lnb') % suffix] = scale_add * numpy.ones((2*dim)).astype(floatX)
@@ -900,7 +900,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         alpha2 = alpha2 / alpha2.sum(0, keepdims=True)
         ctx2_ = (cc2_ * alpha2[:, :, None]).sum(0)  # current context (batch_size, dim_c)
         #ctx_ = concatenate([ctx1_, ctx2_], axis=1)
-        ctx_ = ctx1_
+        ctx_ = ctx1_ + ctx2_ * 0.
 
         h2_prev = h1
         for i in xrange(recurrence_transition_depth - 1):
@@ -952,7 +952,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
                                     sequences=seqs,
                                     outputs_info=[init_state,
                                                   tensor.zeros((n_samples,
-                                                               context1.shape[2] + context2.shape[2])),
+                                                               context1.shape[2])),
                                                   tensor.zeros((n_samples,
                                                                context1.shape[0])),
                                                   tensor.zeros((n_samples,

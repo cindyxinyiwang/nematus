@@ -37,7 +37,7 @@ from theano_util import *
 from alignment_util import *
 from raml_distributions import *
 
-from layers import *
+from layers_test import *
 from initializers import *
 from optimizers import *
 from metrics.scorer_provider import ScorerProvider
@@ -238,7 +238,7 @@ def init_params(options):
                                 nout=options['dim_word'], ortho=False)
 
     params = get_layer_param('ff')(options, params, prefix='ff_logit_ctx',
-                                nin=ctxdim*2, nout=options['dim_word'],
+                                nin=ctxdim, nout=options['dim_word'],
                                 ortho=False)
 
     params = get_layer_param('ff')(options, params, prefix='ff_logit',
@@ -590,7 +590,7 @@ def build_model(tparams, options):
     ctx_mean1 = (ctx1 * x1_mask[:, :, None]).sum(0) / x1_mask.sum(0)[:, None]
     ctx_mean2 = (ctx2 * x2_mask[:, :, None]).sum(0) / x2_mask.sum(0)[:, None]
     #ctx_mean = concatenate([ctx_mean1, ctx_mean2], axis=ctx_mean1.ndim-1)
-    ctx_mean = ctx_mean1
+    ctx_mean = ctx_mean1 + ctx_mean2 * 0
 
     # or you can use the last state of forward + backward encoder rnns
     # ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
@@ -650,7 +650,7 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
 
     logging.info('Building f_init...')
     outs = [init_state, ctx1, ctx2]
-    f_init = theano.function([x1, x2], outs, name='f_init', profile=profile)
+    f_init = theano.function([x1, x2], outs, name='f_init', profile=profile, on_unused_input='warn')
     logging.info('Done')
 
     # x: 1 x 1
@@ -687,7 +687,7 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
         outs.append(opt_ret['dec_alphas1'])
         outs.append(opt_ret['dec_alphas2'])
 
-    f_next = theano.function(inps, outs, name='f_next', profile=profile)
+    f_next = theano.function(inps, outs, name='f_next', profile=profile, on_unused_input='warn')
     logging.info('Done')
 
     return f_init, f_next
