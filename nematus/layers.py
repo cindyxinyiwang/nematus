@@ -717,8 +717,8 @@ def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
     # attention: combined -> hidden
     W_comb_att1 = norm_weight(dim, dimctx)
     params[pp(prefix, 'W_comb_att1')] = W_comb_att1
-    #W_comb_att2 = norm_weight(dim, dimctx)
-    #params[pp(prefix, 'W_comb_att2')] = W_comb_att2
+    W_comb_att2 = norm_weight(dim, dimctx)
+    params[pp(prefix, 'W_comb_att2')] = W_comb_att2
 
     # attention: context -> hidden
     Wc1_att = norm_weight(dimctx)
@@ -735,12 +735,12 @@ def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
     # attention:
     U1_att = norm_weight(dimctx, 1)
     params[pp(prefix, 'U1_att')] = U1_att
-    c1_att = numpy.zeros((1,)).astype(floatX)
-    params[pp(prefix, 'c1_tt')] = c1_att
+    #c1_att = numpy.zeros((1,)).astype(floatX)
+    #params[pp(prefix, 'c1_tt')] = c1_att
     U2_att = norm_weight(dimctx, 1)
     params[pp(prefix, 'U2_att')] = U2_att
-    c2_att = numpy.zeros((1,)).astype(floatX)
-    params[pp(prefix, 'c2_tt')] = c2_att
+    #c2_att = numpy.zeros((1,)).astype(floatX)
+    #params[pp(prefix, 'c2_tt')] = c2_att
 
     if options['layer_normalisation']:
         # layer-normalization parameters
@@ -878,7 +878,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         pctx1__ = pctx1_ + pstate1_[None, :, :]
         #pctx__ += xc_
         pctx1__ = tensor.tanh(pctx1__)
-        alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))+tparams[pp(prefix, 'c1_tt')]
+        #alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))+tparams[pp(prefix, 'c1_tt')]
+        alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))
         alpha1 = alpha1.reshape([alpha1.shape[0], alpha1.shape[1]])
         alpha1 = tensor.exp(alpha1 - alpha1.max(0, keepdims=True))
         if context_mask1:
@@ -886,11 +887,12 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         alpha1 = alpha1 / alpha1.sum(0, keepdims=True)  # (annotation, sample[batch_size])
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
-        #pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
-        pctx2__ = pctx2_ + pstate1_[None, :, :]
+        pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
+        pctx2__ = pctx2_ + pstate2_[None, :, :]
         #pctx__ += xc_
         pctx2__ = tensor.tanh(pctx2__)
-        alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
+        #alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
+        alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))
         alpha2 = alpha2.reshape([alpha2.shape[0], alpha2.shape[1]])
         alpha2 = tensor.exp(alpha2 - alpha2.max(0, keepdims=True))
         if context_mask2:
