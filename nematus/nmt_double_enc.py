@@ -199,7 +199,7 @@ def init_params(options):
 
     # init_state, init_cell
     params = get_layer_param('ff')(options, params, prefix='ff_state',
-                                nin=2*ctxdim, nout=dec_state)
+                                nin=ctxdim, nout=dec_state)
     # decoder
     params = get_layer_param(options['decoder'])(options, params,
                                               prefix='decoder',
@@ -589,7 +589,8 @@ def build_model(tparams, options):
     # mean of the context (across time) will be used to initialize decoder rnn
     ctx_mean1 = (ctx1 * x1_mask[:, :, None]).sum(0) / x1_mask.sum(0)[:, None]
     ctx_mean2 = (ctx2 * x2_mask[:, :, None]).sum(0) / x2_mask.sum(0)[:, None]
-    ctx_mean = concatenate([ctx_mean1, ctx_mean2], axis=ctx_mean1.ndim-1)
+    #ctx_mean = concatenate([ctx_mean1, ctx_mean2], axis=ctx_mean1.ndim-1)
+    ctx_mean = ctx_mean1
 
     # or you can use the last state of forward + backward encoder rnns
     # ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
@@ -634,7 +635,8 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     # get the input for decoder rnn initializer mlp
     ctx1_mean = ctx1.mean(0)
     ctx2_mean = ctx2.mean(0)
-    ctx_mean = concatenate([ctx1_mean, ctx2_mean], axis=ctx1_mean.ndim-1)
+    #ctx_mean = concatenate([ctx1_mean, ctx2_mean], axis=ctx1_mean.ndim-1)
+    ctx_mean = ctx1_mean
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
 
     init_state = get_layer_constr('ff')(tparams, ctx_mean, options, dropout,
