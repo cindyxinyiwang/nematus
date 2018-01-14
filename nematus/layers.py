@@ -651,7 +651,7 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
                         nin=None, dim=None, dimctx=None,
                         nin_nonlin=None, dim_nonlin=None,
-                        recurrence_transition_depth=2):
+                        recurrence_transition_depth=2, cov_score=False, cov=False):
     if nin is None:
         nin = options['dim']
     if dim is None:
@@ -742,6 +742,20 @@ def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
     c2_att = numpy.zeros((1,)).astype(floatX)
     params[pp(prefix, 'c2_tt')] = c2_att
 
+    # coverage
+    if cov:
+        cov1 = norm_weight(1, dimctx)
+        params[pp(prefix, 'cov1')] = cov1 
+        cov2 = norm_weight(1, dimctx)
+        params[pp(prefix, 'cov2')] = cov2
+    if cov_score:
+        cov1 = norm_weight(1, dimctx)
+        params[pp(prefix, 'cov1')] = cov1 
+        U1_copy = norm_weight(dimctx, 1)
+        params[pp(prefix, 'U1_copy')] = U1_copy
+        c1_copy = numpy.zeros((1,)).astype(floatX)
+        params[pp(prefix, 'c1_copy')] = c1_copy
+
     if options['layer_normalisation']:
         # layer-normalization parameters
         params[pp(prefix,'W_lnb')] = scale_add * numpy.ones((2*dim)).astype(floatX)
@@ -778,9 +792,13 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
                    dropout_probability_rec=0,
                    pctx1_=None,
                    pctx2_=None,
+                   cov1_=None,
+                   cov2_=None,
                    recurrence_transition_depth=2,
                    truncate_gradient=-1,
-                   profile=False):
+                   profile=False,
+                   cov_score=False,
+                   cov=False):
                    #**kwargs):
 
     assert context1, 'Context must be provided'
@@ -813,9 +831,12 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
             return param
 
     below_dropout = dropout((n_samples, dim_below),  dropout_probability_below, num=2)
-    ctx1_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=2)
     ctx2_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=2)
     ctx_dropout = dropout((n_samples, 4*options['dim']), dropout_probability_ctx, num=2)
+    if cov_score:
+        ctx1_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=3)
+    else:
+        ctx1_dropout = dropout((n_samples, 2*options['dim']), dropout_probability_ctx, num=2)
 
     # initial/previous state
     if init_state is None:
@@ -850,7 +871,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
     state_below_ = tensor.dot(state_below*below_dropout[1], wn(pp(prefix, 'W'))) +\
         tparams[pp(prefix, 'b')]
 
-    def _step_slice(m_, x_, xx_, h_, ctx_, alpha1_, alpha2_, pctx1_, pctx2_, cc1_, cc2_, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout):
+    def _step_slice(m_, x_, xx_, h_, ctx_, alpha1_, alpha2_, cov1, cov2, copy_score, pctx1_, pctx2_, cc1_, cc2_, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout):
         if options['layer_normalisation']:
             x_ = layer_norm(x_, tparams[pp(prefix, 'W_lnb')], tparams[pp(prefix, 'W_lns')])
             xx_ = layer_norm(xx_, tparams[pp(prefix, 'Wx_lnb')], tparams[pp(prefix, 'Wx_lns')])
@@ -882,6 +903,14 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
             pstate1_ = layer_norm(pstate1_, tparams[pp(prefix, 'W_comb_att_lnb')], tparams[pp(prefix, 'W_comb_att_lns')])
         pctx1__ = pctx1_ + pstate1_[None, :, :]
         #pctx__ += xc_
+
+        if cov_score:
+            att_cov1 = tensor.dot(cov1.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'cov1')])
+            pctxc__ = pctx1__ + att_cov1
+        if cov: 
+            att_cov1 = tensor.dot(cov1.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'cov1')])
+            pctx1__ += att_cov1
+
         pctx1__ = tensor.tanh(pctx1__)
         alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))+tparams[pp(prefix, 'c1_tt')]
         #alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))
@@ -890,12 +919,30 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         if context1_mask:
             alpha1 = alpha1 * context1_mask
         alpha1 = alpha1 / alpha1.sum(0, keepdims=True)  # (annotation, sample[batch_size])
+
+        if cov or cov_score:
+            cov1 += alpha1
+        if not cov_score:
+            copy_score = alpha1.T
+        else:
+            pctxc__ = tensor.tanh(pctxc__)
+            copy_score = tensor.dot(pctxc__*ctx1_dropout[2], wn(pp(prefix, 'U1_copy')))+tparams[pp(prefix, 'c1_copy')]
+            copy_score = copy_score.reshape([alpha1.shape[0], alpha1.shape[1]])
+            copy_score = tensor.exp(copy_score - copy_score.max(0, keepdims=True))
+            if context1_mask:
+                copy_score = copy_score * context1_mask
+            copy_score = copy_score / copy_score.sum(0, keepdims=True)
+            copy_score = copy_score.T
+
         ctx1_ = (cc1_ * alpha1[:, :, None]).sum(0)  # current context
 
         pstate2_ = tensor.dot(h1*rec_dropout[3], wn(pp(prefix, 'W_comb_att2')))
         #pstate2_ = tensor.dot(h1, wn(pp(prefix, 'W_comb_att2')))
         pctx2__ = pctx2_ + pstate2_[None, :, :]
         #pctx__ += xc_
+        if cov:
+            att_cov2 = tensor.dot(cov2.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'cov2')])
+            pctx2__ += att_cov2
         pctx2__ = tensor.tanh(pctx2__)
         alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
         #alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))
@@ -904,6 +951,8 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         if context2_mask:
             alpha2 = alpha2 * context2_mask
         alpha2 = alpha2 / alpha2.sum(0, keepdims=True)
+        if cov:
+            cov2 += alpha2
         ctx2_ = (cc2_ * alpha2[:, :, None]).sum(0)  # current context (batch_size, dim_c)
         ctx_ = concatenate([ctx1_, ctx2_], axis=1)
 
@@ -941,7 +990,7 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
             h2 = m_[:, None] * h2 + (1. - m_)[:, None] * h2_prev
             h2_prev = h2
 
-        return h2, ctx_, alpha1.T, alpha2.T  # pstate_, preact, preactx, r, u
+        return h2, ctx_, alpha1.T, alpha2.T, cov1, cov2, copy_score  # pstate_, preact, preactx, r, u
 
     seqs = [mask, state_below_, state_belowx]
     #seqs = [mask, state_below_, state_belowx, state_belowc]
@@ -950,18 +999,22 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
     shared_vars = []
 
     if one_step:
-        rval = _step(*(seqs + [init_state, None, None, None, pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout] +
+        rval = _step(*(seqs + [init_state, None, None, None,  cov1_, cov2_, None, pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout] +
                        shared_vars))
     else:
         rval, updates = theano.scan(_step,
                                     sequences=seqs,
                                     outputs_info=[init_state,
                                                   tensor.zeros((n_samples,
-                                                               context1.shape[2] + context2.shape[2])),
+                                                               context1.shape[2] + context2.shape[2])), # context
                                                   tensor.zeros((n_samples,
-                                                               context1.shape[0])),
+                                                               context1.shape[0])), # alpha1
                                                   tensor.zeros((n_samples,
-                                                               context2.shape[0]))],
+                                                               context2.shape[0])), # alpha2
+                                                  cov1_,   # cov1
+                                                  cov2_, # cov2
+                                                  tensor.zeros((n_samples,
+                                                               context1.shape[0]))], # copy_score
                                     non_sequences=[pctx1_, pctx2_, context1, context2, rec_dropout, ctx1_dropout, ctx2_dropout, ctx_dropout]+shared_vars,
                                     name=pp(prefix, '_layers'),
                                     n_steps=nsteps,
