@@ -707,8 +707,8 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     if options['deep_fusion_lm']:
         lm_init_state = tensor.matrix('lm_init_state', dtype=floatX)
 
-    cov1_ = tensor.matrix('cov1_', dtype='floatX')
-    cov2_ = tensor.matrix('cov2_', dtype='floatX')
+    cov1_ = tensor.matrix('cov1_', dtype='float32')
+    cov2_ = tensor.matrix('cov2_', dtype='float32')
 
     logit, opt_ret, ret_state, lm_ret_state, pgen, copy_score, cov1, cov2 = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, 
                                     cov1_=cov1_, cov2_=cov2_, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
@@ -942,8 +942,8 @@ def gen_sample(f_init, f_next, x, x_to_y_vocab, model_options=[None], trng=None,
         ctx01[i] = ret[1]
         ctx02[i] = ret[2]
 
-        cov1[i] = numpy.zeros((live_k, ctx01[i].shape[0])) # length1 * batch_size
-        cov2[i] = numpy.zeros((live_k, ctx02[i].shape[0]))
+        cov1[i] = numpy.zeros((live_k, ctx01[i].shape[0])).astype(floatX) # length1 * batch_size
+        cov2[i] = numpy.zeros((live_k, ctx02[i].shape[0])).astype(floatX)
 
     next_w = -1 * numpy.ones((live_k,)).astype('int64')  # bos indicator
 
