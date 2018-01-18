@@ -8,6 +8,50 @@ import cPickle as pkl
 import numpy
 import os
 import math
+import theano
+import theano.tensor as tensor
+
+def align_dot(align, att):
+    '''
+    Build computational graph for alignment calculation
+    align: (batch_size, len1, len2)
+    att: (len2, batch_size)
+    '''
+    scan_func = lambda x, y: tensor.dot(x, y)
+    out, update = theano.scan(scan_func,
+                    sequences = [align, att.dimshuffle(1, 0)],
+                    outputs_info = None,
+                    n_steps = align.shape[0])
+    return out.reshape((align.shape[1], align.shape[0]))
+
+def get_align_matrix(batch_size, len1, len2, len1_list, len2_list,  align_input, rev=False):
+    '''
+    len1, len2: length of the padded input 
+    len1_list, len2_list: length list of the raw sentence
+    '''
+    if rev:
+        align = numpy.zeros((batch_size, len2, len1))
+    else:
+        align = numpy.zeros((batch_size, len1, len2))
+    for i in range(batch_size):
+        align_text = align_input[i]
+        toks = align_text.split()
+        for tok in toks:
+            d = tok.split("-")
+            d1, d2 = int(d[0]), int(d[1])
+            if rev:
+                align[i][d2][d1] = 1.
+            else:
+                align[i][d1][d2] = 1.
+        #print align_text
+        #print len1_list[i], len2_list[i]
+        #print len1, len2
+        if rev:
+            align[i][len2_list[i]][len1_list[i]] = 1.
+        else:
+            align[i][len1_list[i]][len2_list[i]] = 1. # align for eos token
+    align = align.astype(numpy.float32)
+    return align
 
 #json loads strings as unicode; we currently still work with Python 2 strings, and need conversion
 def unicode_to_utf8(d):

@@ -651,7 +651,8 @@ def gru_cond_layer(tparams, state_below, options, dropout, prefix='gru',
 def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
                         nin=None, dim=None, dimctx=None,
                         nin_nonlin=None, dim_nonlin=None,
-                        recurrence_transition_depth=2, cov_score=False, cov=False):
+                        recurrence_transition_depth=2, cov_score=False, cov=False,
+                        align=False):
     if nin is None:
         nin = options['dim']
     if dim is None:
@@ -755,6 +756,11 @@ def param_init_gru_double_cond(options, params, prefix='gru_double_cond',
         params[pp(prefix, 'U1_copy')] = U1_copy
         c1_copy = numpy.zeros((1,)).astype(floatX)
         params[pp(prefix, 'c1_copy')] = c1_copy
+    if align:
+        align1 = norm_weight(1, dim)
+        params[pp(prefix, 'align1')] = align1
+        align2 = norm_weight(1, dim)
+        params[pp(prefix, 'align2')] = align2
 
     if options['layer_normalisation']:
         # layer-normalization parameters
@@ -798,7 +804,9 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
                    truncate_gradient=-1,
                    profile=False,
                    cov_score=False,
-                   cov=False):
+                   cov=False,
+                   align1=None,
+                   align2=None):
                    #**kwargs):
 
     assert context1, 'Context must be provided'
@@ -907,9 +915,18 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         if cov_score:
             att_cov1 = tensor.dot(cov1.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'cov1')])
             pctxc__ = pctx1__ + att_cov1
+            if align1:
+                align_cov1 = align_dot(align1, cov2.dimshuffle(1, 0)) # (len1, batch_size), cov2(len2, batch_size), align1(len1, len2)
+                
+                align_cov1 = tensor.dot(align_cov1.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'align1')]) # (len1, batch_size, 1) * (1, dim)
+                pctxc__ += align_cov1
         if cov: 
             att_cov1 = tensor.dot(cov1.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'cov1')])
             pctx1__ += att_cov1
+            if align1:
+                align_cov1 = align_dot(align1, cov2.dimshuffle(1, 0)) # (len1, batch_size), cov2(len2, batch_size), align1(len1, len2)
+                align_cov1 = tensor.dot(align_cov1.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'align1')]) # (len1, batch_size, 1) * (1, dim)
+                pctx1__ += align_cov1
 
         pctx1__ = tensor.tanh(pctx1__)
         alpha1 = tensor.dot(pctx1__*ctx1_dropout[1], wn(pp(prefix, 'U1_att')))+tparams[pp(prefix, 'c1_tt')]
@@ -943,6 +960,10 @@ def gru_double_cond_layer(tparams, state_below, options, dropout, prefix='gru_do
         if cov:
             att_cov2 = tensor.dot(cov2.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'cov2')])
             pctx2__ += att_cov2
+            if align2:
+                align_cov2 = align_dot(align2, cov1.dimshuffle(1, 0)) # (len1, batch_size), cov2(len2, batch_size), align1(len1, len2)
+                align_cov2 = tensor.dot(align_cov2.dimshuffle(0, 1, 'x'), tparams[pp(prefix, 'align2')]) # (len1, batch_size, 1) * (1, dim)
+                pctx2__ += align_cov2
         pctx2__ = tensor.tanh(pctx2__)
         alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))+tparams[pp(prefix, 'c2_tt')]
         #alpha2 = tensor.dot(pctx2__*ctx2_dropout[1], wn(pp(prefix, 'U2_att')))

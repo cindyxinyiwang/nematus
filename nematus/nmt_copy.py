@@ -104,9 +104,9 @@ def prepare_data_multi_src(seqs_x1, seqs_x2, seqs_y, weights=None, maxlen=None, 
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
     if weights is not None:
-        return x1, x1_mask, x2, x2_mask, y, y_mask, weights
+        return x1, x1_mask, x2, x2_mask, y, y_mask, lengths_x1, lengths_x2, weights
     else:
-        return x1, x1_mask, x2, x2_mask, y, y_mask
+        return x1, x1_mask, x2, x2_mask, y, y_mask, lengths_x1, lengths_x2
 
 def prepare_data(seqs_x, seqs_y, weights=None, maxlen=None, n_words_src=30000,
                  n_words=30000, n_factors=1):
@@ -209,7 +209,8 @@ def init_params(options):
                                               dimctx=ctxdim,
                                               recurrence_transition_depth=options['dec_base_recurrence_transition_depth'],
                                               cov=options['cov'],
-                                              cov_score=options['cov_score'])
+                                              cov_score=options['cov_score'],
+                                              align=options['align'])
 
     # deeper layers of the decoder
     if options['dec_depth'] > 1:
@@ -385,7 +386,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
 
 # RNN decoder (including embedding and feedforward layer before output)
 def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, 
-    y_mask=None, sampling=False, pctx1_=None, pctx2_=None, cov1_=None, cov2_=None, shared_vars=None, lm_init_state=None):
+    y_mask=None, sampling=False, pctx1_=None, pctx2_=None, cov1_=None, cov2_=None, shared_vars=None, 
+    lm_init_state=None, align1=None, align2=None):
     opt_ret = dict()
 
     # tell RNN whether to advance just one step at a time (for sampling),
@@ -438,7 +440,9 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
                                             truncate_gradient=options['decoder_truncate_gradient'],
                                             profile=profile,
                                             cov_score=options['cov_score'],
-                                            cov=options['cov'])
+                                            cov=options['cov'],
+                                            align1=align1,
+                                            align2=align2)
     # hidden states of the decoder gru
     next_state = proj[0]
 
@@ -639,9 +643,15 @@ def build_model(tparams, options):
 
     cov1_ = tensor.zeros((ctx1.shape[0], n_samples))
     cov2_ = tensor.zeros((ctx2.shape[0], n_samples))
-
+    if options['align']:
+        align1 = tensor.tensor3('align1', dtype=floatX)
+        align2 = tensor.tensor3('align2', dtype=floatX)
+    else:
+        align1 = None
+        align2 = None
     logit, opt_ret, _, _, pgen, copy_score, _, _ = build_decoder(tparams, options, y, ctx1, ctx2, 
-        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, cov1_=cov1_, cov2_=cov2_, sampling=False)
+        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, cov1_=cov1_, cov2_=cov2_, 
+        align1=align1, align2=align2, sampling=False)
 
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
@@ -663,7 +673,7 @@ def build_model(tparams, options):
 
     #print "Print out in build_model()"
     #print opt_ret
-    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost, y_in_x
+    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost, y_in_x, align1, align2
 
 
 # build a sampler
@@ -707,11 +717,18 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     if options['deep_fusion_lm']:
         lm_init_state = tensor.matrix('lm_init_state', dtype=floatX)
 
-    cov1_ = tensor.matrix('cov1_', dtype='float32')
-    cov2_ = tensor.matrix('cov2_', dtype='float32')
+    cov1_ = tensor.matrix('cov1_', dtype=floatX)
+    cov2_ = tensor.matrix('cov2_', dtype=floatX)
+    if options['align']:
+        align1 = tensor.matrix('align1', dtype=floatX)
+        align2 = tensor.matrix('align2', dtype=floatX)
+    else:
+        align1 = None
+        align2 = None
 
     logit, opt_ret, ret_state, lm_ret_state, pgen, copy_score, cov1, cov2 = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, 
-                                    cov1_=cov1_, cov2_=cov2_, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
+                                    cov1_=cov1_, cov2_=cov2_, x1_mask=None, x2_mask=None, y_mask=None, align1=align1, align2=align2,
+                                    sampling=True, lm_init_state=lm_init_state)
 
     # compute the softmax probability
     probs = tensor.nnet.softmax(logit)  # (batch_size, trg_vocab_size)
@@ -737,7 +754,10 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
         inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_, lm_init_state]
         outs = [next_probs, next_sample, ret_state, cov1, cov2, lm_ret_state]
     else:
-        inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_]
+        if options['align']:
+            inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_, align1, align2]
+        else:
+            inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_]
         outs = [next_probs, next_sample, ret_state, cov1, cov2]
 
     if return_alignment:
@@ -878,7 +898,7 @@ def build_full_sampler(tparams, options, use_noise, trng, greedy=False):
 
 def gen_sample(f_init, f_next, x, x_to_y_vocab, model_options=[None], trng=None, k=1, maxlen=30,
                stochastic=True, argmax=False, return_alignment=False, suppress_unk=False,
-               return_hyp_graph=False):
+               return_hyp_graph=False, align1=None, align2=None):
 
     # k is the beam size we have
     if k > 1 and argmax:
@@ -965,6 +985,10 @@ def gen_sample(f_init, f_next, x, x_to_y_vocab, model_options=[None], trng=None,
                 next_p[i], next_w_tmp, next_state[i], lm_next_state[i] = ret[0], ret[1], ret[2], ret[3]
             else:
                 inps = [next_w, ctx1, ctx2, x_to_y_vocab, next_state[i], cov1[i], cov2[i]]
+                if not align1 is None:
+                    inps += [align1]
+                if not align2 is None:
+                    inps += [align2]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i], cov1[i], cov2[i] = ret[0], ret[1], ret[2], ret[3], ret[4]
@@ -1183,7 +1207,7 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
     alignments1_json = []
     alignments2_json = []
 
-    for x, y in iterator:
+    for x, y, a1, a2 in iterator:
         #ensure consistency in number of factors
         #if len(x[0][0]) != options['factors']:
         #    logging.error('Mismatch between number of factors in settings ({0}), and number in validation corpus ({1})\n'.format(options['factors'], len(x[0][0])))
@@ -1191,7 +1215,7 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
 
         n_done += len(x)
 
-        x1, x1_mask, x2, x2_mask, y, y_mask = prepare_data_multi_src(x[0], x[1], y,
+        x1, x1_mask, x2, x2_mask, y, y_mask, lengths_x1, lengths_x2 = prepare_data_multi_src(x[0], x[1], y,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'],
                                             n_factors=options['factors'])
@@ -1202,15 +1226,25 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
         y_in_x *= xmask1t.reshape((1, xmask1t.shape[0], xmask1t.shape[1]))
         y_in_x *= y_mask.reshape((y_mask.shape[0], y_mask.shape[1], 1))
         y_in_x = y_in_x.astype(numpy.float32)
+        if options['align']:
+            a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2,  a1)
+            a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
+
         ### in optional save weights mode.
         if alignweights:
-            pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
+            if options['align']:
+                pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+            else:
+                pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
             for jdata in get_alignments(attention1, x1_mask, y_mask):
                 alignments1_json.append(jdata)
             for jdata in get_alignments(attention2, x2_mask, y_mask):
                 alignments2_json.append(jdata)
         else:
-            pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
+            if options['align']:
+                pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+            else:
+                pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
 
         # normalize scores according to output length
         if normalization_alpha:
@@ -1254,6 +1288,13 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
         x1 = numpy.array(x1).T.reshape([len(x1[0]), len(x1), 1])
         x2 = numpy.array(x2).T.reshape([len(x2[0]), len(x2), 1])
 
+        if options['align']:
+            a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], [x1.shape[1]], [x2.shape[1]],  a1)
+            a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], [x1.shape[1]], [x2.shape[1]], a2, rev=True)
+        else:
+            a1_matrix = None
+            a2_matrix = None
+
         sample, score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
                     [x1, x2],
                     x_to_y_vocab,
@@ -1263,7 +1304,9 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
                     stochastic=False,
                     argmax=False,
                     suppress_unk=False,
-                    return_hyp_graph=False)
+                    return_hyp_graph=False,
+                    align1=a1_matrix,
+                    align2=a2_matrix)
         #score = score / numpy.array([len(s) for s in sample])
         idx = numpy.argmin(score)
         ss = sample[idx]
@@ -1382,10 +1425,14 @@ def train(dim_word=512,  # word vector dimensionality
           validFreq=10000,
           saveFreq=30000,   # save the parameters after every saveFreq updates
           sampleFreq=10000,   # generate some samples after every sampleFreq
-          datasets=[ # path to training datasets (source and target)
+          datasets=[ # path to training datasets (source and target, align1, align2)
+              None,
+              None,
               None,
               None],
           valid_datasets=[None, # path to validation datasets (source and target)
+                          None,
+                          None,
                           None],
           dictionaries=[ # path to dictionaries (json file created with ../data/build_dictionary.py). One dictionary per input factor; last dictionary is target-side dictionary.
               None,
@@ -1432,7 +1479,9 @@ def train(dim_word=512,  # word vector dimensionality
 
           bleu=False,
           postprocess=None,
-          valid_ref=None
+          valid_ref=None,
+
+          align=False
     ):
 
     # Model options
@@ -1569,7 +1618,9 @@ def train(dim_word=512,  # word vector dimensionality
                            shuffle_each_epoch=shuffle_each_epoch,
                            sort_by_length=sort_by_length,
                            use_factor=False,
-                           maxibatch_size=maxibatch_size)
+                           maxibatch_size=maxibatch_size,
+                           align1_file=datasets[2],
+                           align2_file=datasets[3])
         else:
           train = TextIterator(datasets[0], datasets[1],
                            dictionaries[:-1], dictionaries[-1],
@@ -1589,7 +1640,9 @@ def train(dim_word=512,  # word vector dimensionality
                               n_words_source=n_words_src, n_words_target=n_words,
                               batch_size=valid_batch_size,
                               use_factor=False,
-                              maxlen=maxlen)
+                              maxlen=maxlen,
+                              align1_file=valid_datasets[2],
+                              align2_file=valid_datasets[3])
         else:
           valid = TextIterator(valid_datasets[0], valid_datasets[1],
                               dictionaries[:-1], dictionaries[-1],
@@ -1640,10 +1693,14 @@ def train(dim_word=512,  # word vector dimensionality
     trng, use_noise, \
         x1, x1_mask, x2, x2_mask, y, y_mask, \
         opt_ret, \
-        cost, y_in_x = \
+        cost, y_in_x, align1, align2 = \
         build_model(tparams, model_options)
 
     inps = [x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x]
+    if align1:
+        inps += [align1]
+    if align2:
+        inps += [align2]
 
     if validFreq or sampleFreq:
         logging.info('Building sampler')
@@ -1761,7 +1818,7 @@ def train(dim_word=512,  # word vector dimensionality
     for training_progress.eidx in xrange(training_progress.eidx, max_epochs):
         n_samples = 0
 
-        for x, y in train:
+        for x, y, a1, a2 in train:
             training_progress.uidx += 1
             use_noise.set_value(1.)
 
@@ -1782,7 +1839,7 @@ def train(dim_word=512,  # word vector dimensionality
                 if multi_src:
                     xlen = len(x[0])
                     n_samples += xlen
-                    x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
+                    x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights, lengths_x1, lengths_x2 = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
@@ -1797,6 +1854,9 @@ def train(dim_word=512,  # word vector dimensionality
                     #print y_in_x
                     #print y
                     #print x1
+                    if align:
+                        a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2,  a1)
+                        a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
                 else:
                     xlen = len(x)
                     n_samples += xlen
@@ -1823,7 +1883,10 @@ def train(dim_word=512,  # word vector dimensionality
                     cost = f_update(lrate, x, x_mask, y, y_mask, sample_weights)
                 else:
                     if multi_src:
-                      cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
+                      if align:
+                        cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                      else:
+                        cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
                     else:
                       cost = f_update(lrate, x, x_mask, y, y_mask)
                 cost_sum += cost
@@ -1984,6 +2047,14 @@ def train(dim_word=512,  # word vector dimensionality
                     for i in range(len(x1_current[0])):
                         x_to_y_vocab[i, x1_current[0][i]] = 1.
                     x_to_y_vocab = x_to_y_vocab.astype(numpy.float32)
+                    if align:
+                        a1_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
+                            [len(t)+1 for t1 in x[0][:jj]], [len(t)+1 for t in x[1][:jj]],  a1[:jj])
+                        a2_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
+                            [len(t)+1 for t1 in x[0][:jj]], [len(t)+1 for t in x[1][:jj]], a2[:jj], rev=True)
+                    else:
+                        a1_matrix_current = None
+                        a2_matrix_current = None
 
                     sample, score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
                                                [x1_current, x2_current],
@@ -1994,7 +2065,9 @@ def train(dim_word=512,  # word vector dimensionality
                                                stochastic=stochastic,
                                                argmax=False,
                                                suppress_unk=False,
-                                               return_hyp_graph=False)
+                                               return_hyp_graph=False,
+                                               align1=a1_matrix_current,
+                                               align2=a2_matrix_current)
                     print 'Source1 ', jj, ': ',
                     for pos in range(x1.shape[1]):
                         if x1[0, pos, jj] == 0:
@@ -2172,7 +2245,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     data = parser.add_argument_group('data sets; model loading and saving')
-    data.add_argument('--datasets', type=str, required=True, metavar='PATH', nargs=2,
+    data.add_argument('--datasets', type=str, required=True, metavar='PATH', nargs=4,
                          help="parallel training corpus (source and target)")
     data.add_argument('--dictionaries', type=str, required=True, metavar='PATH', nargs="+",
                          help="network vocabularies (one per source factor, plus target vocabulary)")
@@ -2252,6 +2325,8 @@ if __name__ == '__main__':
                          help="whether use coverage for attention")
     network.add_argument('--cov_score', action="store_true", dest="cov_score",
                          help="whether use coverage for copy score calculation")
+    network.add_argument('--align', action="store_true", dest="align",
+                         help="whether use alignment information for calculating coverage")
 
     training = parser.add_argument_group('training parameters')
     training.add_argument('--multi_src', action="store_true")
@@ -2291,7 +2366,7 @@ if __name__ == '__main__':
                          help="truncate BPTT gradients in the encoder to this value. Use -1 for no truncation (default: %(default)s)")
 
     validation = parser.add_argument_group('validation parameters')
-    validation.add_argument('--valid_datasets', type=str, default=None, metavar='PATH', nargs=2,
+    validation.add_argument('--valid_datasets', type=str, default=None, metavar='PATH', nargs=4,
                          help="parallel validation corpus (source and target) (default: %(default)s)")
     validation.add_argument('--valid_batch_size', type=int, default=80, metavar='INT',
                          help="validation minibatch size (default: %(default)s)")
