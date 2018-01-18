@@ -39,6 +39,8 @@ def get_align_matrix(batch_size, len1, len2, len1_list, len2_list,  align_input,
         for tok in toks:
             d = tok.split("-")
             d1, d2 = int(d[0]), int(d[1])
+            if d1 >= len1 or d2 >= len2:
+                continue
             if rev:
                 align[i][d2][d1] = 1.
             else:

@@ -2064,6 +2064,7 @@ def train(dim_word=512,  # word vector dimensionality
 
 
             # generate some samples with the model and display them
+            '''
             if sampleFreq and numpy.mod(training_progress.uidx, sampleFreq) == 0:
                 # FIXME: random selection?
                 for jj in xrange(numpy.minimum(5, x1.shape[2])):
@@ -2079,10 +2080,10 @@ def train(dim_word=512,  # word vector dimensionality
                         x_to_y_vocab[i, x1_current[0][i]] = 1.
                     x_to_y_vocab = x_to_y_vocab.astype(numpy.float32)
                     if align:
-                        a1_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
+                        a1_matrix_current = get_align_matrix(1, x1_current.shape[1], x2_current.shape[1], 
                             [lengths_x1[jj]], [lengths_x2[jj]],  [a1[jj]])
                         if cov:
-                            a2_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
+                            a2_matrix_current = get_align_matrix(1, x1_current.shape[1], x2_current.shape[1], 
                                 [lengths_x1[jj]], [lengths_x2[jj]], [a2[jj]], rev=True)
                         else:
                             a2_matrix_current = None
@@ -2154,7 +2155,7 @@ def train(dim_word=512,  # word vector dimensionality
                             print 'UNK',
                     print
                     print
-
+            '''
             # validate model on validation set and early stop if necessary
             if valid is not None and validFreq and numpy.mod(training_progress.uidx, validFreq) == 0:
                 use_noise.set_value(0.)
