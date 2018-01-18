@@ -104,7 +104,7 @@ def prepare_data_multi_src(seqs_x1, seqs_x2, seqs_y, weights=None, maxlen=None, 
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
     if weights is not None:
-        return x1, x1_mask, x2, x2_mask, y, y_mask, lengths_x1, lengths_x2, weights
+        return x1, x1_mask, x2, x2_mask, y, y_mask, weights, lengths_x1, lengths_x2
     else:
         return x1, x1_mask, x2, x2_mask, y, y_mask, lengths_x1, lengths_x2
 
@@ -645,7 +645,10 @@ def build_model(tparams, options):
     cov2_ = tensor.zeros((ctx2.shape[0], n_samples))
     if options['align']:
         align1 = tensor.tensor3('align1', dtype=floatX)
-        align2 = tensor.tensor3('align2', dtype=floatX)
+        if options['cov']:
+            align2 = tensor.tensor3('align2', dtype=floatX)
+        else:
+            align2 = None
     else:
         align1 = None
         align2 = None
@@ -720,8 +723,11 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     cov1_ = tensor.matrix('cov1_', dtype=floatX)
     cov2_ = tensor.matrix('cov2_', dtype=floatX)
     if options['align']:
-        align1 = tensor.matrix('align1', dtype=floatX)
-        align2 = tensor.matrix('align2', dtype=floatX)
+        align1 = tensor.tensor3('align1', dtype=floatX)
+        if options['cov']:
+            align2 = tensor.tensor3('align2', dtype=floatX)
+        else:
+            align2 = None
     else:
         align1 = None
         align2 = None
@@ -755,7 +761,10 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
         outs = [next_probs, next_sample, ret_state, cov1, cov2, lm_ret_state]
     else:
         if options['align']:
-            inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_, align1, align2]
+            if options['cov']:
+                inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_, align1, align2]
+            else:
+                inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_, align1]
         else:
             inps = [y, ctx1, ctx2, x_to_y_vocab, init_state, cov1_, cov2_]
         outs = [next_probs, next_sample, ret_state, cov1, cov2]
@@ -986,9 +995,11 @@ def gen_sample(f_init, f_next, x, x_to_y_vocab, model_options=[None], trng=None,
             else:
                 inps = [next_w, ctx1, ctx2, x_to_y_vocab, next_state[i], cov1[i], cov2[i]]
                 if not align1 is None:
-                    inps += [align1]
+                    a1 = numpy.tile(align1, [live_k, 1, 1])
+                    inps += [a1] 
                 if not align2 is None:
-                    inps += [align2]
+                    a2 = numpy.tile(align2, [live_k, 1, 1])
+                    inps += [a2]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i], cov1[i], cov2[i] = ret[0], ret[1], ret[2], ret[3], ret[4]
@@ -1228,12 +1239,16 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
         y_in_x = y_in_x.astype(numpy.float32)
         if options['align']:
             a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2,  a1)
-            a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
+            if options['cov']:
+                a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
 
         ### in optional save weights mode.
         if alignweights:
             if options['align']:
-                pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                if options['cov']:
+                    pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                else:
+                    pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix)
             else:
                 pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
             for jdata in get_alignments(attention1, x1_mask, y_mask):
@@ -1242,7 +1257,10 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
                 alignments2_json.append(jdata)
         else:
             if options['align']:
-                pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                if options['cov']:
+                    pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                else:
+                    pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix)
             else:
                 pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
 
@@ -1265,6 +1283,8 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
     source = datasets[0].split(',')
     input1 = open(source[0], 'r')
     input2 = open(source[1], 'r')
+    align1 = open(datasets[2], 'r')
+    align2 = open(datasets[3], 'r')
     for l1 in input1:
         l2 = input2.readline()
 
@@ -1289,8 +1309,13 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
         x2 = numpy.array(x2).T.reshape([len(x2[0]), len(x2), 1])
 
         if options['align']:
-            a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], [x1.shape[1]], [x2.shape[1]],  a1)
-            a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], [x1.shape[1]], [x2.shape[1]], a2, rev=True)
+            a1 = align1.readline()
+            a1_matrix = get_align_matrix(1, x1.shape[1], x2.shape[1], [x1.shape[1]-1], [x2.shape[1]-1],  [a1])
+            if options['cov']:
+                a2 = align2.readline()
+                a2_matrix = get_align_matrix(1, x1.shape[1], x2.shape[1], [x1.shape[1]-1], [x2.shape[1]-1], [a2], rev=True)
+            else:
+                a2_matrix = None
         else:
             a1_matrix = None
             a2_matrix = None
@@ -1699,7 +1724,7 @@ def train(dim_word=512,  # word vector dimensionality
     inps = [x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x]
     if align1:
         inps += [align1]
-    if align2:
+    if cov:
         inps += [align2]
 
     if validFreq or sampleFreq:
@@ -1856,7 +1881,10 @@ def train(dim_word=512,  # word vector dimensionality
                     #print x1
                     if align:
                         a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2,  a1)
-                        a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
+                        if cov:
+                            a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
+                        else:
+                            a2_matrix = None
                 else:
                     xlen = len(x)
                     n_samples += xlen
@@ -1884,7 +1912,10 @@ def train(dim_word=512,  # word vector dimensionality
                 else:
                     if multi_src:
                       if align:
-                        cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                        if cov:
+                            cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix, a2_matrix)
+                        else:
+                            cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x, a1_matrix)
                       else:
                         cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
                     else:
@@ -2049,9 +2080,12 @@ def train(dim_word=512,  # word vector dimensionality
                     x_to_y_vocab = x_to_y_vocab.astype(numpy.float32)
                     if align:
                         a1_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
-                            [len(t)+1 for t1 in x[0][:jj]], [len(t)+1 for t in x[1][:jj]],  a1[:jj])
-                        a2_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
-                            [len(t)+1 for t1 in x[0][:jj]], [len(t)+1 for t in x[1][:jj]], a2[:jj], rev=True)
+                            [lengths_x1[jj]], [lengths_x2[jj]],  [a1[jj]])
+                        if cov:
+                            a2_matrix_current = get_align_matrix(y.shape[1], x1_current.shape[1], x2_current.shape[1], 
+                                [lengths_x1[jj]], [lengths_x2[jj]], [a2[jj]], rev=True)
+                        else:
+                            a2_matrix_current = None
                     else:
                         a1_matrix_current = None
                         a2_matrix_current = None

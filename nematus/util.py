@@ -43,9 +43,6 @@ def get_align_matrix(batch_size, len1, len2, len1_list, len2_list,  align_input,
                 align[i][d2][d1] = 1.
             else:
                 align[i][d1][d2] = 1.
-        #print align_text
-        #print len1_list[i], len2_list[i]
-        #print len1, len2
         if rev:
             align[i][len2_list[i]][len1_list[i]] = 1.
         else:
