@@ -185,7 +185,7 @@ class MultiSrcTextIterator:
             if align1_file:
                 self.align_orig1 = align1_file
                 self.align_orig2 = align2_file
-                self.source1, self.source2, self.target, self.align1, self.align2 = shuffle.main([self.source_orig1, self.source_orig2, self.target_orig, self.ailgn_orig1, self.align_orig2], temporary=True)
+                self.source1, self.source2, self.target, self.align1, self.align2 = shuffle.main([self.source_orig1, self.source_orig2, self.target_orig, self.align_orig1, self.align_orig2], temporary=True)
             else:
                 self.source1, self.source2, self.target = shuffle.main([self.source_orig1, self.source_orig2, self.target_orig], temporary=True)
                 self.align1 = None
