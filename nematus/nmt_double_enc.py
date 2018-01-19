@@ -104,9 +104,9 @@ def prepare_data_multi_src(seqs_x1, seqs_x2, seqs_y, weights=None, maxlen=None, 
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
     if weights is not None:
-        return x1, x1_mask, x2, x2_mask, y, y_mask, weights
+        return x1, x1_mask, x2, x2_mask, y, y_mask, weights, lengths_x1, lengths_x2 
     else:
-        return x1, x1_mask, x2, x2_mask, y, y_mask
+        return x1, x1_mask, x2, x2_mask, y, y_mask, lengths_x1, lengths_x2
 
 def prepare_data(seqs_x, seqs_y, weights=None, maxlen=None, n_words_src=30000,
                  n_words=30000, n_factors=1):
@@ -206,7 +206,10 @@ def init_params(options):
                                               nin=options['dim_word'],
                                               dim=options['dim'],
                                               dimctx=ctxdim,
-                                              recurrence_transition_depth=options['dec_base_recurrence_transition_depth'])
+                                              recurrence_transition_depth=options['dec_base_recurrence_transition_depth'],
+                                              cov=options['cov'],
+                                              cov_score=options['cov_score'],
+                                              align=options['align'])
 
     # deeper layers of the decoder
     if options['dec_depth'] > 1:
@@ -371,7 +374,8 @@ def build_encoder(tparams, options, dropout, x1_mask=None, x2_mask=None, samplin
 
 # RNN decoder (including embedding and feedforward layer before output)
 def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, 
-    y_mask=None, sampling=False, pctx1_=None, pctx2_=None, shared_vars=None, lm_init_state=None):
+    y_mask=None, sampling=False, pctx1_=None, pctx2_=None, cov1_=None, cov2_=None, shared_vars=None, 
+    lm_init_state=None, align1=None, align2=None):
     opt_ret = dict()
 
     # tell RNN whether to advance just one step at a time (for sampling),
@@ -414,6 +418,7 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
                                             mask=y_mask, context1=ctx1, context2=ctx2,
                                             context1_mask=x1_mask, context2_mask=x2_mask,
                                             pctx1_=pctx1_, pctx2_=pctx2_,
+                                            cov1_=cov1_, cov2_=cov2_,
                                             one_step=one_step,
                                             init_state=init_state[0],
                                             recurrence_transition_depth=options['dec_base_recurrence_transition_depth'],
@@ -421,7 +426,11 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
                                             dropout_probability_ctx=options['dropout_hidden'],
                                             dropout_probability_rec=options['dropout_hidden'],
                                             truncate_gradient=options['decoder_truncate_gradient'],
-                                            profile=profile)
+                                            profile=profile,
+                                            cov_score=options['cov_score'],
+                                            cov=options['cov'],
+                                            align1=align1,
+                                            align2=align2)
     # hidden states of the decoder gru
     next_state = proj[0]
 
@@ -431,6 +440,8 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
     # weights (alignment matrix)
     opt_ret['dec_alphas1'] = proj[2]
     opt_ret['dec_alphas2'] = proj[3]
+    cov1 = proj[4]
+    cov2 = proj[5]
 
     # we return state of each layer
     if sampling:
@@ -563,7 +574,7 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
                             dropout_probability=options['dropout_hidden'],
                             prefix='ff_logit', activ='linear', W=logit_W, followed_by_softmax=True)
 
-    return logit, opt_ret, ret_state, lm_ret_state
+    return logit, opt_ret, ret_state, lm_ret_state, cov1, cov2
 
 # build a training model
 def build_model(tparams, options):
@@ -604,8 +615,19 @@ def build_model(tparams, options):
     if options['dec_depth'] > 1:
         init_state = tensor.tile(init_state, (options['dec_depth'], 1, 1))
 
-    logit, opt_ret, _, _ = build_decoder(tparams, options, y, ctx1, ctx2, 
-        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, sampling=False)
+    cov1_ = tensor.zeros((ctx1.shape[0], n_samples))
+    cov2_ = tensor.zeros((ctx2.shape[0], n_samples))
+    if options['align']:
+        align1 = tensor.tensor3('align1', dtype=floatX)
+        if options['cov']:
+            align2 = tensor.tensor3('align2', dtype=floatX)
+        else:
+            align2 = None
+    else:
+        align1 = None
+        align2 = None
+    logit, opt_ret, _, _, _, _ = build_decoder(tparams, options, y, ctx1, ctx2, 
+        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, cov1_=cov1_, cov2_=cov2_, sampling=False)
 
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
@@ -663,7 +685,10 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     if options['deep_fusion_lm']:
         lm_init_state = tensor.matrix('lm_init_state', dtype=floatX)
 
-    logit, opt_ret, ret_state, lm_ret_state = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
+    cov1_ = tensor.matrix('cov1_', dtype=floatX)
+    cov2_ = tensor.matrix('cov2_', dtype=floatX)
+    logit, opt_ret, ret_state, lm_ret_state, cov1, cov2 = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, 
+                            cov1_=cov1_, cov2_=cov2_, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
 
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
@@ -675,11 +700,11 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
     # sampled word for the next target, next hidden state to be used
     logging.info('Building f_next..')
     if options['deep_fusion_lm']:
-        inps = [y, ctx1, ctx2, init_state, lm_init_state]
-        outs = [next_probs, next_sample, ret_state, lm_ret_state]
+        inps = [y, ctx1, ctx2, init_state, cov1_, cov2_, lm_init_state]
+        outs = [next_probs, next_sample, ret_state, cov1, cov2, lm_ret_state]
     else:
-        inps = [y, ctx1, ctx2, init_state]
-        outs = [next_probs, next_sample, ret_state]
+        inps = [y, ctx1, ctx2, init_state, cov1_, cov2_]
+        outs = [next_probs, next_sample, ret_state, cov1, cov2]
 
     if return_alignment:
         outs.append(opt_ret['dec_alphas1'])
@@ -818,8 +843,6 @@ def build_full_sampler(tparams, options, use_noise, trng, greedy=False):
 
 
 
-# generate sample, either with stochastic sampling or beam search. Note that,
-# this function iteratively calls f_init and f_next functions.
 def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=30,
                stochastic=True, argmax=False, return_alignment=False, suppress_unk=False,
                return_hyp_graph=False):
@@ -868,6 +891,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
     next_p = [None]*num_models
     dec_alphas1 = [None]*num_models
     dec_alphas2 = [None]*num_models
+    cov1 = [None]*num_models
+    cov2 = [None]*num_models
     # get initial state of decoder rnn and encoder context
     for i in xrange(num_models):
         ret = f_init[i](x1, x2)
@@ -884,6 +909,9 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
         ctx01[i] = ret[1]
         ctx02[i] = ret[2]
 
+        cov1[i] = numpy.zeros((live_k, ctx01[i].shape[0])).astype(floatX) # length1 * batch_size
+        cov2[i] = numpy.zeros((live_k, ctx02[i].shape[0])).astype(floatX)
+
     next_w = -1 * numpy.ones((live_k,)).astype('int64')  # bos indicator
 
     # x is a sequence of word ids followed by 0, eos id
@@ -894,6 +922,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
 
             # for theano function, go from (batch_size, layers, dim) to (layers, batch_size, dim)
             next_state[i] = numpy.transpose(next_state[i], (1,0,2))
+            cov1[i] = numpy.transpose(cov1[i], (1, 0))
+            cov2[i] = numpy.transpose(cov2[i], (1, 0))
 
             if 'deep_fusion_lm' in model_options and model_options['deep_fusion_lm']:
                 inps = [next_w, ctx1, ctx2, next_state[i], lm_next_state[i]]
@@ -901,10 +931,10 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i], lm_next_state[i] = ret[0], ret[1], ret[2], ret[3]
             else:
-                inps = [next_w, ctx1, ctx2, next_state[i]]
+                inps = [next_w, ctx1, ctx2, next_state[i], cov1[i], cov2[i]]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
-                next_p[i], next_w_tmp, next_state[i] = ret[0], ret[1], ret[2]
+                next_p[i], next_w_tmp, next_state[i], cov1[i], cov2[i] = ret[0], ret[1], ret[2], ret[3], ret[4]
                 # dummy LM states
                 lm_next_state[i] = [None]*live_k
 
@@ -914,6 +944,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
 
             # to more easily manipulate batch size, go from (layers, batch_size, dim) to (batch_size, layers, dim)
             next_state[i] = numpy.transpose(next_state[i], (1,0,2))
+            cov1[i] = numpy.transpose(cov1[i], (1, 0))
+            cov2[i] = numpy.transpose(cov2[i], (1, 0))
 
             if suppress_unk:
                 next_p[i][:,1] = -numpy.inf
@@ -937,24 +969,32 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
 
                 hyp_states=[]
                 hyp_lm_states=[]
+                hyp_cov1=[]
+                hyp_cov2=[]
                 for ti in xrange(live_k):
                     hyp_states.append([copy.copy(next_state[i][ti]) for i in xrange(num_models)])
                     hyp_lm_states.append([copy.copy(lm_next_state[i][ti]) for i in xrange(num_models)])
                     hyp_scores[ti]=cand_scores[ti][nws[ti]]
                     word_probs[ti].append(probs[ti][nws[ti]])
+                    hyp_cov1.append([copy.copy(cov1[i][ti]) for i in xrange(num_models)])
+                    hyp_cov2.append([copy.copy(cov2[i][ti]) for i in xrange(num_models)])
 
                 new_hyp_states=[]
                 new_hyp_lm_states=[]
                 new_hyp_samples=[]
                 new_hyp_scores=[]
                 new_word_probs=[]
-                for hyp_sample, hyp_state, hyp_lm_state, hyp_score, hyp_word_prob in zip(hyp_samples, hyp_states, hyp_lm_states ,hyp_scores, word_probs):
+                new_cov1=[]
+                new_cov2=[]
+                for hyp_sample, hyp_state, hyp_lm_state, hyp_score, hyp_word_prob, hyp_c1, hyp_c2 in zip(hyp_samples, hyp_states, hyp_lm_states ,hyp_scores, word_probs, hyp_cov1, hyp_cov2):
                     if hyp_sample[-1]  > 0:
                         new_hyp_samples.append(copy.copy(hyp_sample))
                         new_hyp_states.append(copy.copy(hyp_state))
                         new_hyp_lm_states.append(copy.copy(hyp_lm_state))
                         new_hyp_scores.append(hyp_score)
                         new_word_probs.append(hyp_word_prob)
+                        new_cov1.append(copy.copy(hyp_c1))
+                        new_cov2.append(copy.copy(hyp_c2))
                     else:
                         sample.append(copy.copy(hyp_sample))
                         sample_score.append(hyp_score)
@@ -965,6 +1005,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 hyp_lm_states=new_hyp_lm_states
                 hyp_scores=new_hyp_scores
                 word_probs=new_word_probs
+                hyp_cov1=new_cov1
+                hyp_cov2=new_cov2
 
                 live_k=len(hyp_samples)
                 if live_k < 1:
@@ -973,6 +1015,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 next_w = numpy.array([w[-1] for w in hyp_samples])
                 next_state = [numpy.array(state) for state in zip(*hyp_states)]
                 lm_next_state = [numpy.array(state) for state in zip(*hyp_lm_states)]
+                cov1 = [numpy.array(c1) for c1 in zip(*hyp_cov1)]
+                cov2 = [numpy.array(c2) for c2 in zip(*hyp_cov2)]
         else:
             cand_scores = hyp_scores[:, None] - sum(numpy.log(next_p))
             probs = sum(next_p)/num_models
@@ -996,6 +1040,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             new_word_probs = []
             new_hyp_states = []
             new_hyp_lm_states = []
+            new_cov1 = []
+            new_cov2 = []
             if return_alignment:
                 # holds the history of attention weights for each time step for each of the surviving hypothesis
                 # dimensions (live_k * target_words * source_hidden_units]
@@ -1010,6 +1056,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 new_hyp_scores[idx] = copy.copy(costs[idx])
                 new_hyp_states.append([copy.copy(next_state[i][ti]) for i in xrange(num_models)])
                 new_hyp_lm_states.append([copy.copy(lm_next_state[i][ti]) for i in xrange(num_models)])
+                new_cov1.append([copy.copy(cov1[i][ti]) for i in xrange(num_models)])
+                new_cov2.append([copy.copy(cov2[i][ti]) for i in xrange(num_models)])
                 if return_alignment:
                     # get history of attention weights for the current hypothesis
                     new_hyp_alignment1[idx] = copy.copy(hyp_alignment1[ti])
@@ -1028,6 +1076,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             hyp_states = []
             hyp_lm_states = []
             word_probs = []
+            hyp_cov1 = []
+            hyp_cov2 = []
             if return_alignment:
                 hyp_alignment1 = []
                 hyp_alignment2 = []
@@ -1053,7 +1103,10 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                     hyp_scores.append(new_hyp_scores[idx])
                     hyp_states.append(copy.copy(new_hyp_states[idx]))
                     hyp_lm_states.append(copy.copy(new_hyp_lm_states[idx]))
+                    hyp_cov1.append(copy.copy(new_cov1[idx]))
+                    hyp_cov2.append(copy.copy(new_cov2[idx]))
                     word_probs.append(new_word_probs[idx])
+                    
                     if return_alignment:
                         hyp_alignment1.append(new_hyp_alignment1[idx])
                         hyp_alignment2.append(new_hyp_alignment2[idx])
@@ -1069,6 +1122,8 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
             next_w = numpy.array([w[-1] for w in hyp_samples])
             next_state = [numpy.array(state) for state in zip(*hyp_states)]
             lm_next_state = [numpy.array(state) for state in zip(*hyp_lm_states)]
+            cov1 = [numpy.array(c1) for c1 in zip(*hyp_cov1)]
+            cov2 = [numpy.array(c2) for c2 in zip(*hyp_cov2)]
 
     # dump every remaining one
     if not argmax and live_k > 0:
@@ -1086,6 +1141,7 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
     return sample, sample_score, sample_word_probs, alignment1, alignment2, hyp_graph
 
 
+
 # calculate the log probablities on a given corpus using translation model
 def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=True, normalization_alpha=0.0, alignweights=False):
     probs = []
@@ -1094,7 +1150,7 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
     alignments1_json = []
     alignments2_json = []
 
-    for x, y in iterator:
+    for x, y, a1, a2 in iterator:
         #ensure consistency in number of factors
         #if len(x[0][0]) != options['factors']:
         #    logging.error('Mismatch between number of factors in settings ({0}), and number in validation corpus ({1})\n'.format(options['factors'], len(x[0][0])))
@@ -1102,7 +1158,7 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
 
         n_done += len(x)
 
-        x1, x1_mask, x2, x2_mask, y, y_mask = prepare_data_multi_src(x[0], x[1], y,
+        x1, x1_mask, x2, x2_mask, y, y_mask, a1, a2 = prepare_data_multi_src(x[0], x[1], y,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'],
                                             n_factors=options['factors'])
@@ -1134,6 +1190,7 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
     n_done = 0
     #assert options['valid_batch_size'] == 1
     source = datasets[0].split(',')
+
     input1 = open(source[0], 'r')
     input2 = open(source[1], 'r')
     for l1 in input1:
@@ -1329,8 +1386,13 @@ def train(dim_word=512,  # word vector dimensionality
 
           bleu=False,
           postprocess=None,
-          valid_ref=None
+          valid_ref=None,
+
+          cov=False,
+          cov_score=False,
+          align=False
     ):
+    assert not cov_score, "double enc model does not support cov_score option"
 
     # Model options
     model_options = OrderedDict(sorted(locals().copy().items()))
@@ -1660,7 +1722,7 @@ def train(dim_word=512,  # word vector dimensionality
     for training_progress.eidx in xrange(training_progress.eidx, max_epochs):
         n_samples = 0
 
-        for x, y in train:
+        for x, y, a1, a2 in train:
             training_progress.uidx += 1
             use_noise.set_value(1.)
 
@@ -1681,7 +1743,7 @@ def train(dim_word=512,  # word vector dimensionality
                 if multi_src:
                   xlen = len(x[0])
                   n_samples += xlen
-                  x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
+                  x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights, a1, a2 = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
@@ -2055,7 +2117,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     data = parser.add_argument_group('data sets; model loading and saving')
-    data.add_argument('--datasets', type=str, required=True, metavar='PATH', nargs=2,
+    data.add_argument('--datasets', type=str, required=True, metavar='PATH', nargs=4,
                          help="parallel training corpus (source and target)")
     data.add_argument('--dictionaries', type=str, required=True, metavar='PATH', nargs="+",
                          help="network vocabularies (one per source factor, plus target vocabulary)")
@@ -2131,6 +2193,12 @@ if __name__ == '__main__':
                          help='decoder recurrent layer after first one (default: %(default)s)')
     network.add_argument('--concatenate_lm_decoder', action="store_true", dest="concatenate_lm_decoder",
                          help="concatenate LM state and decoder state (deep fusion)")
+    network.add_argument('--cov', action="store_true", dest="cov",
+                         help="whether use coverage for attention")
+    network.add_argument('--cov_score', action="store_true", dest="cov_score",
+                         help="whether use coverage for copy score calculation. This is always false for double_enc")
+    network.add_argument('--align', action="store_true", dest="align",
+                         help="whether use alignment information for calculating coverage")
 
     training = parser.add_argument_group('training parameters')
     training.add_argument('--multi_src', action="store_true")
@@ -2170,7 +2238,7 @@ if __name__ == '__main__':
                          help="truncate BPTT gradients in the encoder to this value. Use -1 for no truncation (default: %(default)s)")
 
     validation = parser.add_argument_group('validation parameters')
-    validation.add_argument('--valid_datasets', type=str, default=None, metavar='PATH', nargs=2,
+    validation.add_argument('--valid_datasets', type=str, default=None, metavar='PATH', nargs=4,
                          help="parallel validation corpus (source and target) (default: %(default)s)")
     validation.add_argument('--valid_batch_size', type=int, default=80, metavar='INT',
                          help="validation minibatch size (default: %(default)s)")
