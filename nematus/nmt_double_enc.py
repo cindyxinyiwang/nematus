@@ -627,7 +627,8 @@ def build_model(tparams, options):
         align1 = None
         align2 = None
     logit, opt_ret, _, _, _, _ = build_decoder(tparams, options, y, ctx1, ctx2, 
-        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, cov1_=cov1_, cov2_=cov2_, sampling=False)
+        init_state, dropout, x1_mask=x1_mask, x2_mask=x2_mask, y_mask=y_mask, cov1_=cov1_, cov2_=cov2_,
+        align1=align1, align2=align2, sampling=False)
 
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
@@ -642,7 +643,7 @@ def build_model(tparams, options):
 
     #print "Print out in build_model()"
     #print opt_ret
-    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x1, x1_mask, x2, x2_mask, y, y_mask, opt_ret, cost, align1, align2
 
 
 # build a sampler
@@ -687,8 +688,19 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
 
     cov1_ = tensor.matrix('cov1_', dtype=floatX)
     cov2_ = tensor.matrix('cov2_', dtype=floatX)
+    if options['align']:
+        align1 = tensor.tensor3('align1', dtype=floatX)
+        if options['cov']:
+            align2 = tensor.tensor3('align2', dtype=floatX)
+        else:
+            align2 = None
+    else:
+        align1 = None
+        align2 = None
+
     logit, opt_ret, ret_state, lm_ret_state, cov1, cov2 = build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, 
-                            cov1_=cov1_, cov2_=cov2_, x1_mask=None, x2_mask=None, y_mask=None, sampling=True, lm_init_state=lm_init_state)
+                            cov1_=cov1_, cov2_=cov2_, x1_mask=None, x2_mask=None, y_mask=None, align1=align1, align2=align2,
+                            sampling=True, lm_init_state=lm_init_state)
 
     # compute the softmax probability
     next_probs = tensor.nnet.softmax(logit)
@@ -703,7 +715,13 @@ def build_sampler(tparams, options, use_noise, trng, return_alignment=False):
         inps = [y, ctx1, ctx2, init_state, cov1_, cov2_, lm_init_state]
         outs = [next_probs, next_sample, ret_state, cov1, cov2, lm_ret_state]
     else:
-        inps = [y, ctx1, ctx2, init_state, cov1_, cov2_]
+        if options['align']:
+            if options['cov']:
+                inps = [y, ctx1, ctx2, init_state, cov1_, cov2_, align1, align2]
+            else:
+                inps = [y, ctx1, ctx2, init_state, cov1_, cov2_, align1]
+        else:
+            inps = [y, ctx1, ctx2, init_state, cov1_, cov2_]
         outs = [next_probs, next_sample, ret_state, cov1, cov2]
 
     if return_alignment:
@@ -845,7 +863,7 @@ def build_full_sampler(tparams, options, use_noise, trng, greedy=False):
 
 def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=30,
                stochastic=True, argmax=False, return_alignment=False, suppress_unk=False,
-               return_hyp_graph=False):
+               return_hyp_graph=False, align1=None, align2=None):
 
     # k is the beam size we have
     if k > 1 and argmax:
@@ -932,6 +950,12 @@ def gen_sample(f_init, f_next, x, model_options=[None], trng=None, k=1, maxlen=3
                 next_p[i], next_w_tmp, next_state[i], lm_next_state[i] = ret[0], ret[1], ret[2], ret[3]
             else:
                 inps = [next_w, ctx1, ctx2, next_state[i], cov1[i], cov2[i]]
+                if not align1 is None:
+                    a1 = numpy.tile(align1, [live_k, 1, 1])
+                    inps += [a1] 
+                if not align2 is None:
+                    a2 = numpy.tile(align2, [live_k, 1, 1])
+                    inps += [a2]
                 ret = f_next[i](*inps)
                 # dimension of dec_alpha (k-beam-size, number-of-input-hidden-units)
                 next_p[i], next_w_tmp, next_state[i], cov1[i], cov2[i] = ret[0], ret[1], ret[2], ret[3], ret[4]
@@ -1162,15 +1186,31 @@ def pred_probs(f_log_probs, prepare_data_multi_src, options, iterator, verbose=T
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'],
                                             n_factors=options['factors'])
+        if options['align']:
+            a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2,  a1)
+            if options['cov']:
+                a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
 
         ### in optional save weights mode.
         if alignweights:
+            if options['align']:
+                if options['cov']:
+                    pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, a1_matrix, a2_matrix)
+                else:
+                    pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, a1_matrix)
+            else:
+                pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x)
             pprobs, attention1, attention2 = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask)
             for jdata in get_alignments(attention1, x1_mask, y_mask):
                 alignments1_json.append(jdata)
             for jdata in get_alignments(attention2, x2_mask, y_mask):
                 alignments2_json.append(jdata)
         else:
+            if options['align']:
+                if options['cov']:
+                    pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, a1_matrix, a2_matrix)
+                else:
+                    pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask, a1_matrix)
             pprobs = f_log_probs(x1, x1_mask, x2, x2_mask, y, y_mask)
 
         # normalize scores according to output length
@@ -1193,6 +1233,8 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
 
     input1 = open(source[0], 'r')
     input2 = open(source[1], 'r')
+    align1 = open(datasets[2], 'r')
+    align2 = open(datasets[3], 'r')
     for l1 in input1:
         l2 = input2.readline()
 
@@ -1211,6 +1253,18 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
         x1 = numpy.array(x1).T.reshape([len(x1[0]), len(x1), 1])
         x2 = numpy.array(x2).T.reshape([len(x2[0]), len(x2), 1])
 
+        if options['align']:
+            a1 = align1.readline()
+            a1_matrix = get_align_matrix(1, x1.shape[1], x2.shape[1], [x1.shape[1]-1], [x2.shape[1]-1],  [a1])
+            if options['cov']:
+                a2 = align2.readline()
+                a2_matrix = get_align_matrix(1, x1.shape[1], x2.shape[1], [x1.shape[1]-1], [x2.shape[1]-1], [a2], rev=True)
+            else:
+                a2_matrix = None
+        else:
+            a1_matrix = None
+            a2_matrix = None
+
         sample, score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
                     [x1, x2],
                     options,
@@ -1219,13 +1273,17 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
                     stochastic=False,
                     argmax=False,
                     suppress_unk=False,
-                    return_hyp_graph=False)
+                    return_hyp_graph=False,
+                    align1=a1_matrix,
+                    align2=a2_matrix)
         #score = score / numpy.array([len(s) for s in sample])
         idx = numpy.argmin(score)
         ss = sample[idx]
         translations.append(ss)
     input1.close()
     input2.close()
+    align1.close()
+    align2.close()
     return translations
 
 def augment_raml_data(x, y, tgt_worddict, options):
@@ -1530,7 +1588,9 @@ def train(dim_word=512,  # word vector dimensionality
                            shuffle_each_epoch=shuffle_each_epoch,
                            sort_by_length=sort_by_length,
                            use_factor=False,
-                           maxibatch_size=maxibatch_size)
+                           maxibatch_size=maxibatch_size,
+                           align1_file=datasets[2],
+                           align2_file=datasets[3])
         else:
           train = TextIterator(datasets[0], datasets[1],
                            dictionaries[:-1], dictionaries[-1],
@@ -1550,7 +1610,9 @@ def train(dim_word=512,  # word vector dimensionality
                               n_words_source=n_words_src, n_words_target=n_words,
                               batch_size=valid_batch_size,
                               use_factor=False,
-                              maxlen=maxlen)
+                              maxlen=maxlen,
+                              align1_file=valid_datasets[2],
+                              align2_file=valid_datasets[3])
         else:
           valid = TextIterator(valid_datasets[0], valid_datasets[1],
                               dictionaries[:-1], dictionaries[-1],
@@ -1601,10 +1663,14 @@ def train(dim_word=512,  # word vector dimensionality
     trng, use_noise, \
         x1, x1_mask, x2, x2_mask, y, y_mask, \
         opt_ret, \
-        cost = \
+        cost, align1, align2 = \
         build_model(tparams, model_options)
 
     inps = [x1, x1_mask, x2, x2_mask, y, y_mask]
+    if align1:
+        inps += [align1]
+    if align2:
+        inps += [align2]
 
     if validFreq or sampleFreq:
         logging.info('Building sampler')
@@ -1741,17 +1807,23 @@ def train(dim_word=512,  # word vector dimensionality
                     sample_weights = [1.0] * len(y)
                 
                 if multi_src:
-                  xlen = len(x[0])
-                  n_samples += xlen
-                  x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights, a1, a2 = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
+                    xlen = len(x[0])
+                    n_samples += xlen
+                    x1, x1_mask, x2, x2_mask, y, y_mask, sample_weights, lengths_x1, lengths_x2 = prepare_data_multi_src(x[0], x[1], y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
                                                                       n_words=n_words)
+                    if align:
+                        a1_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2,  a1)
+                        if cov:
+                            a2_matrix = get_align_matrix(y.shape[1], x1.shape[1], x2.shape[1], lengths_x1, lengths_x2, a2, rev=True)
+                        else:
+                            a2_matrix = None
                 else:
-                  xlen = len(x)
-                  n_samples += xlen
-                  x, x_mask, y, y_mask, sample_weights = prepare_data(x, y, weights=sample_weights,
+                    xlen = len(x)
+                    n_samples += xlen
+                    x, x_mask, y, y_mask, sample_weights = prepare_data(x, y, weights=sample_weights,
                                                                       maxlen=maxlen,
                                                                       n_factors=factors,
                                                                       n_words_src=n_words_src,
@@ -1774,7 +1846,13 @@ def train(dim_word=512,  # word vector dimensionality
                     cost = f_update(lrate, x, x_mask, y, y_mask, sample_weights)
                 else:
                     if multi_src:
-                      cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask)
+                      if align:
+                        if cov:
+                            cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, a1_matrix, a2_matrix)
+                        else:
+                            cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask, a1_matrix)
+                      else:
+                        cost = f_update(lrate, x1, x1_mask, x2, x2_mask, y, y_mask)
                     else:
                       cost = f_update(lrate, x, x_mask, y, y_mask)
                 cost_sum += cost
@@ -1919,7 +1997,7 @@ def train(dim_word=512,  # word vector dimensionality
                     save(params, optimizer_params, training_progress, saveto_uidx)
                     logging.info('Done')
 
-
+            '''
             # generate some samples with the model and display them
             if sampleFreq and numpy.mod(training_progress.uidx, sampleFreq) == 0:
                 # FIXME: random selection?
@@ -1930,6 +2008,17 @@ def train(dim_word=512,  # word vector dimensionality
                     # remove padding
                     x1_current = x1_current[:,:x1_mask.astype('int64')[:, jj].sum(),:]
                     x2_current = x2_current[:,:x2_mask.astype('int64')[:, jj].sum(),:]
+                    if align:
+                        a1_matrix_current = get_align_matrix(1, x1_current.shape[1], x2_current.shape[1], 
+                            [lengths_x1[jj]], [lengths_x2[jj]],  [a1[jj]])
+                        if cov:
+                            a2_matrix_current = get_align_matrix(1, x1_current.shape[1], x2_current.shape[1], 
+                                [lengths_x1[jj]], [lengths_x2[jj]], [a2[jj]], rev=True)
+                        else:
+                            a2_matrix_current = None
+                    else:
+                        a1_matrix_current = None
+                        a2_matrix_current = None
 
                     sample, score, sample_word_probs, alignment1, alignment2, hyp_graph = gen_sample([f_init], [f_next],
                                                [x1_current, x2_current],
@@ -1939,7 +2028,9 @@ def train(dim_word=512,  # word vector dimensionality
                                                stochastic=stochastic,
                                                argmax=False,
                                                suppress_unk=False,
-                                               return_hyp_graph=False)
+                                               return_hyp_graph=False,
+                                               align1=a1_matrix_current,
+                                               align2=a2_matrix_current)
                     print 'Source1 ', jj, ': ',
                     for pos in range(x1.shape[1]):
                         if x1[0, pos, jj] == 0:
@@ -1992,7 +2083,7 @@ def train(dim_word=512,  # word vector dimensionality
                             print 'UNK',
                     print
                     print
-
+            '''
             # validate model on validation set and early stop if necessary
             if valid is not None and validFreq and numpy.mod(training_progress.uidx, validFreq) == 0:
                 use_noise.set_value(0.)

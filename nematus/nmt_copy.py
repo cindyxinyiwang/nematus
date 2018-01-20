@@ -1338,6 +1338,8 @@ def get_translation(f_init, f_next, options, datasets, dictionaries, trng):
         translations.append(ss)
     input1.close()
     input2.close()
+    align1.close()
+    align2.close()
     return translations
 
 def augment_raml_data(x, y, tgt_worddict, options):
@@ -1724,7 +1726,7 @@ def train(dim_word=512,  # word vector dimensionality
     inps = [x1, x1_mask, x2, x2_mask, y, y_mask, y_in_x]
     if align1:
         inps += [align1]
-    if cov:
+    if align2:
         inps += [align2]
 
     if validFreq or sampleFreq:
