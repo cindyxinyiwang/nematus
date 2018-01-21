@@ -252,16 +252,17 @@ def init_params(options):
                                 followed_by_softmax=True)
 
     params = get_layer_param('ff')(options, params, prefix='ff_copy_lstm',
-                                nin=options['dim'], nout=1,
+                                nin=options['dim'], nout=1, bias=False,
                                 ortho=False)
     params = get_layer_param('ff')(options, params, prefix='ff_copy_prev',
-                                nin=options['dim_word'],
+                                nin=options['dim_word'], bias=False,
                                 nout=1, ortho=False)
 
     params = get_layer_param('ff')(options, params, prefix='ff_copy_ctx',
-                                nin=ctxdim*2, nout=1,
+                                nin=ctxdim*2, nout=1, bias=False,
                                 ortho=False)
-
+    
+    params['pgen_bias'] = b = 0.01 * numpy.ones((1)).astype(floatX)
     return params
 
 # initialize LM parameters (deep fusion)
@@ -452,7 +453,7 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
     # weights (alignment matrix)
     opt_ret['dec_alphas1'] = proj[2]
     opt_ret['dec_alphas2'] = proj[3]
-    alpha1 = proj[2] # (batch_size, length x1) copy_score
+    alpha1 = proj[2] # (timestep, batch_size, length x1) copy_score
     alpha2 = proj[3]
     cov1 = proj[4]
     cov2 = proj[5]
@@ -591,14 +592,18 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
 
     copy_lstm = get_layer_constr('ff')(tparams, next_state, options, dropout,
                                     dropout_probability=options['dropout_hidden'],
-                                    prefix='ff_copy_lstm', activ='linear')
+                                    prefix='ff_copy_lstm', activ='linear', bias=False)
     copy_prev = get_layer_constr('ff')(tparams, emb, options, dropout,
                                     dropout_probability=options['dropout_embedding'],
-                                    prefix='ff_copy_prev', activ='linear')
+                                    prefix='ff_copy_prev', activ='linear', bias=False)
     copy_ctx = get_layer_constr('ff')(tparams, ctxs, options, dropout,
                                    dropout_probability=options['dropout_hidden'],
-                                   prefix='ff_copy_ctx', activ='linear')
-    pgen = tensor.nnet.sigmoid(copy_lstm+copy_prev+copy_ctx) # (y_len, batch_size, 1)
+                                   prefix='ff_copy_ctx', activ='linear', bias=False)
+    if sampling:
+        pgen_bias = tensor.tile(tparams['pgen_bias'], (copy_ctx.shape[0], copy_ctx.shape[1]) )
+    else:
+        pgen_bias = tensor.tile(tparams['pgen_bias'], (copy_ctx.shape[0], copy_ctx.shape[1], copy_ctx.shape[2]) )
+    pgen = tensor.nnet.sigmoid(copy_lstm+copy_prev+copy_ctx+pgen_bias) # (y_len, batch_size, 1)
     return logit, opt_ret, ret_state, lm_ret_state, pgen, copy_score, cov1, cov2
 
 # build a training model
