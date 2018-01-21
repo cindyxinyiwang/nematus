@@ -138,10 +138,10 @@ def param_init_fflayer(options, params, prefix='ff', nin=None, nout=None,
 
 
 def fflayer(tparams, state_below, options, dropout, prefix='rconv',
-            activ='lambda x: tensor.tanh(x)', W=None, b=None, dropout_probability=0, followed_by_softmax=False, **kwargs):
+            activ='lambda x: tensor.tanh(x)', W=None, b=None, dropout_probability=0, followed_by_softmax=False, bias=True, **kwargs):
     if W == None:
         W = tparams[pp(prefix, 'W')]
-    if b == None:
+    if b == None and bias:
         b = tparams[pp(prefix, 'b')]
 
     # for three-dimensional tensors, we assume that first dimension is number of timesteps
@@ -154,11 +154,12 @@ def fflayer(tparams, state_below, options, dropout, prefix='rconv',
 
     if options['weight_normalisation'] and not followed_by_softmax:
          W = weight_norm(W, tparams[pp(prefix, 'W_wns')])
-    preact = tensor.dot(state_below*dropout_mask, W) + b
+    preact = tensor.dot(state_below*dropout_mask, W)
+    if bias:
+        preact += b
 
     if options['layer_normalisation'] and not followed_by_softmax:
         preact = layer_norm(preact, tparams[pp(prefix,'ln_b')], tparams[pp(prefix,'ln_s')])
-
     return eval(activ)(preact)
 
 # embedding layer
