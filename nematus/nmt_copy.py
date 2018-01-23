@@ -262,7 +262,7 @@ def init_params(options):
                                 nin=ctxdim*2, nout=1, bias=False,
                                 ortho=False)
     
-    params['pgen_bias'] = b = 0.01 * numpy.ones((1)).astype(floatX)
+    params['pgen_bias'] = b = 5 * numpy.ones((1)).astype(floatX)
     return params
 
 # initialize LM parameters (deep fusion)
@@ -603,7 +603,7 @@ def build_decoder(tparams, options, y, ctx1, ctx2, init_state, dropout, x1_mask=
         pgen_bias = tensor.tile(tparams['pgen_bias'], (copy_ctx.shape[0], copy_ctx.shape[1]) )
     else:
         pgen_bias = tensor.tile(tparams['pgen_bias'], (copy_ctx.shape[0], copy_ctx.shape[1], copy_ctx.shape[2]) )
-    pgen = tensor.nnet.sigmoid(copy_lstm+copy_prev+copy_ctx+pgen_bias) # (y_len, batch_size, 1)
+    pgen = tensor.nnet.sigmoid((copy_lstm+copy_prev+copy_ctx+pgen_bias) / 2. ) # (y_len, batch_size, 1)
     return logit, opt_ret, ret_state, lm_ret_state, pgen, copy_score, cov1, cov2
 
 # build a training model
