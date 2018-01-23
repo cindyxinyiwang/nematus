@@ -84,7 +84,7 @@ def load_params_lm(options, params, with_prefix='lm_'):
     return params
 
 # load parameters
-def load_params(path, params, with_prefix=''):
+def load_params(path, params, with_prefix='', pretrained=False):
     try:
         pp = numpy.load(path)
     except IOError:
@@ -92,7 +92,10 @@ def load_params(path, params, with_prefix=''):
     new_params = OrderedDict()
     for kk, vv in params.iteritems():
         if kk not in pp:
-            logging.warn('%s is not in the archive' % kk)
+            if not pretrained:
+                logging.warn('%s is not in the archive' % kk)
+            else:
+                new_params[with_prefix+kk] = vv
             continue
         if kk == "zipped_params":
             continue

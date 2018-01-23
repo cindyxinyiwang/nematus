@@ -1513,7 +1513,8 @@ def train(dim_word=512,  # word vector dimensionality
           postprocess=None,
           valid_ref=None,
 
-          align=False
+          align=False,
+          init_model=None
     ):
 
     # Model options
@@ -1706,6 +1707,9 @@ def train(dim_word=512,  # word vector dimensionality
     elif prior_model:
         logging.info('Initializing model parameters from prior')
         params = load_params(prior_model, params)
+    elif init_model:
+        logging.info('Initializing model parameters from pretrained model')
+        params = load_params(init_model, params, pretrained=True)
 
     # load prior model if specified
     if prior_model:
@@ -2406,6 +2410,8 @@ if __name__ == '__main__':
                          help="truncate BPTT gradients in the encoder to this value. Use -1 for no truncation (default: %(default)s)")
     training.add_argument('--decoder_truncate_gradient', type=int, default=-1, metavar='INT',
                          help="truncate BPTT gradients in the encoder to this value. Use -1 for no truncation (default: %(default)s)")
+    training.add_argument('--init_model', type=str,
+                         help="pretrained model to initialize params")
 
     validation = parser.add_argument_group('validation parameters')
     validation.add_argument('--valid_datasets', type=str, default=None, metavar='PATH', nargs=4,
